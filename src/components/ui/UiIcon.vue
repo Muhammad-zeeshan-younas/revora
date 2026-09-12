@@ -1,0 +1,118 @@
+<script setup lang="ts">
+  import {
+    PhSquaresFour,
+    PhUsers,
+    PhReceipt,
+    PhArrowsLeftRight,
+    PhChartLineUp,
+    PhShieldCheck,
+    PhSparkle,
+    PhGearSix,
+    PhCaretDown,
+    PhCaretRight,
+    PhArrowUpRight,
+    PhArrowDownRight,
+    PhArrowRight,
+    PhArrowLeft,
+    PhPlus,
+    PhMagnifyingGlass,
+    PhBell,
+    PhQuestion,
+    PhSignOut,
+    PhDownloadSimple,
+    PhUploadSimple,
+    PhX,
+    PhCheck,
+    PhCheckCircle,
+    PhWarningCircle,
+    PhClock,
+    PhWhatsappLogo,
+    PhPhone,
+    PhEnvelopeSimple,
+    PhDotsThree,
+    PhCalendarBlank,
+    PhFunnelSimple,
+    PhWallet,
+    PhTrendUp,
+    PhBuildings,
+    PhList,
+    PhSpinnerGap,
+    PhCopy,
+    PhArrowClockwise,
+    PhFileCsv,
+    PhTarget,
+    PhLightning,
+    PhLockKey,
+    PhPaperPlaneTilt,
+    PhChatCircleText,
+    PhLink,
+    PhPause,
+  } from '@phosphor-icons/vue';
+
+  const icons = {
+    grid: PhSquaresFour,
+    users: PhUsers,
+    invoice: PhReceipt,
+    payments: PhArrowsLeftRight,
+    chart: PhChartLineUp,
+    shield: PhShieldCheck,
+    sparkle: PhSparkle,
+    settings: PhGearSix,
+    down: PhCaretDown,
+    right: PhCaretRight,
+    upRight: PhArrowUpRight,
+    downRight: PhArrowDownRight,
+    arrow: PhArrowRight,
+    back: PhArrowLeft,
+    plus: PhPlus,
+    search: PhMagnifyingGlass,
+    bell: PhBell,
+    help: PhQuestion,
+    logout: PhSignOut,
+    download: PhDownloadSimple,
+    upload: PhUploadSimple,
+    close: PhX,
+    check: PhCheck,
+    checkCircle: PhCheckCircle,
+    warning: PhWarningCircle,
+    clock: PhClock,
+    whatsapp: PhWhatsappLogo,
+    phone: PhPhone,
+    email: PhEnvelopeSimple,
+    more: PhDotsThree,
+    calendar: PhCalendarBlank,
+    filter: PhFunnelSimple,
+    wallet: PhWallet,
+    trend: PhTrendUp,
+    building: PhBuildings,
+    menu: PhList,
+    spinner: PhSpinnerGap,
+    copy: PhCopy,
+    refresh: PhArrowClockwise,
+    csv: PhFileCsv,
+    target: PhTarget,
+    lightning: PhLightning,
+    lock: PhLockKey,
+    send: PhPaperPlaneTilt,
+    chat: PhChatCircleText,
+    link: PhLink,
+    pause: PhPause,
+  };
+  export type IconName = keyof typeof icons;
+  withDefaults(
+    defineProps<{
+      name: IconName;
+      size?: number;
+      weight?: 'regular' | 'bold' | 'fill' | 'duotone';
+    }>(),
+    { size: 20, weight: 'regular' },
+  );
+</script>
+<template>
+  <component
+    :is="icons[name]"
+    :size="size"
+    :weight="weight"
+    aria-hidden="true"
+  />
+</template>

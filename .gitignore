@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-api/
+data/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.sqlite
+*.sqlite-*
+test-results/
+playwright-report/
+*.log
+preview/
