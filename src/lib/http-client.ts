@@ -19,7 +19,8 @@ export async function request<T>(path: string, schema: z.ZodType<T>, body?: obje
     signal: AbortSignal.timeout(15000),
   });
   if (!response.ok) {
-    const result = errorSchema.safeParse(await response.json());
+    // Proxies can return HTML or an empty response. Preserve the HTTP status in those cases.
+    const result = errorSchema.safeParse(await response.json().catch(() => null));
     throw new ApiError(
       result.success
         ? typeof result.data.message === 'string'

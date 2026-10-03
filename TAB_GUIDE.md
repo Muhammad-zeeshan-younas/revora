@@ -18,6 +18,8 @@ This guide explains the information, actions, scenarios, and edge cases in the c
 
 ## Shared concepts
 
+Company setup is arranged through the Revora team. There is no public registration form or registration API. Existing users sign in, and invited teammates can accept their invitation. Contact details and the operator setup interface are pending. Development accounts and permission scenarios are documented in [SEED_GUIDE.md](SEED_GUIDE.md).
+
 | Term                                 | Meaning in Revora                                                                                                                                                      |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | PKR / Rs                             | Pakistani rupees. Inputs accept up to two decimal places; stored calculations use integer paisa (100 paisa = Rs 1).                                                    |
@@ -56,7 +58,7 @@ Blue indicates an action or selection. Green status badges indicate successful/n
 - With no outstanding balances, age and overdue percentage display zero; the aging chart has no populated slices.
 - Collections follow the payment's recorded date. Allocating an old receipt today changes that receipt's historical month. Reversing it removes its allocations from historical collection totals.
 - Invoiced and collected lines are different populations; collections can exceed invoices issued in a month.
-- The “open invoices” count currently excludes drafts and fully paid invoices, but does not explicitly exclude written-off records. Their balance still contributes zero. Treat the amount as authoritative if imported/seeded data includes write-offs.
+- The “open invoices” count includes invoices with a positive outstanding balance. Drafts, written-off records, and fully paid invoices are excluded; disputed invoices with a remaining balance are included.
 - Export report downloads the workspace's invoice report. It is not restricted to the chart period.
 
 ## Customers

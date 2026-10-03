@@ -60,6 +60,7 @@ async function preview(): Promise<void> {
         animations: 'disabled',
       });
     }
+    await page.getByRole('button', { name: 'Account options', exact: true }).click();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.screenshot({ path: 'preview/settings.png', fullPage: true, animations: 'disabled' });
     console.log('Development screenshots saved to preview/.');

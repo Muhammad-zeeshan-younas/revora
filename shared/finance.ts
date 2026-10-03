@@ -1,15 +1,19 @@
 import { CollectionPriority, InvoiceStatus, PaymentStatus, PromiseStatus } from './enums';
-import type { Customer, Invoice, Payment, Workspace } from './schema';
+import type { Customer, Invoice, Payment, PromiseToPay, Workspace } from './schema';
 import type { AccountSummary, AgingBucket, ReceivablesMetrics } from './finance.types';
 import { FINANCE } from './constants';
+import { groupBy } from './collections';
+
+const dateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: FINANCE.timezone,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+const moneyFormatter = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2 });
 
 export function today(now = new Date()): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: FINANCE.timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(now);
+  return dateFormatter.format(now);
 }
 export function offsetDate(date: string, days: number): string {
   return new Date(Date.parse(`${date}T00:00:00Z`) + days * FINANCE.millisecondsPerDay)
@@ -44,22 +48,54 @@ export function invoiceStatus(invoice: Invoice, date = today()): InvoiceStatus {
   return invoice.paid > 0 ? InvoiceStatus.PartiallyPaid : InvoiceStatus.Open;
 }
 export function account(workspace: Workspace, customerId: string, date = today()): AccountSummary {
-  const invoices = workspace.invoices.filter((invoice) => invoice.customerId === customerId);
-  const outstanding = invoices.reduce((sum, invoice) => sum + balance(invoice), 0);
-  const overdue = invoices.reduce(
-    (sum, invoice) => sum + (overdueDays(invoice, date) > 0 ? balance(invoice) : 0),
-    0,
+  return summarizeAccount(
+    workspace.customers.find((customer) => customer.id === customerId),
+    workspace.invoices.filter((invoice) => invoice.customerId === customerId),
+    workspace.promises.filter((promise) => promise.customerId === customerId),
+    date,
   );
-  const days = Math.max(
-    0,
-    ...invoices
-      .filter((invoice) => balance(invoice) > 0)
-      .map((invoice) => overdueDays(invoice, date)),
-  );
-  const broken = workspace.promises.filter(
-    (promise) => promise.customerId === customerId && promise.status === PromiseStatus.Broken,
-  ).length;
-  const customer = workspace.customers.find((item) => item.id === customerId);
+}
+
+/** Compute the customer list in linear passes over invoices and promises. */
+export function customerAccounts(
+  workspace: Workspace,
+  date = today(),
+): (Customer & AccountSummary)[] {
+  const invoicesByCustomer = groupBy(workspace.invoices, (invoice) => invoice.customerId);
+  const promisesByCustomer = groupBy(workspace.promises, (promise) => promise.customerId);
+
+  return workspace.customers.map((customer) => ({
+    ...customer,
+    ...summarizeAccount(
+      customer,
+      invoicesByCustomer.get(customer.id) ?? [],
+      promisesByCustomer.get(customer.id) ?? [],
+      date,
+    ),
+  }));
+}
+
+function summarizeAccount(
+  customer: Customer | undefined,
+  invoices: readonly Invoice[],
+  promises: readonly PromiseToPay[],
+  date: string,
+): AccountSummary {
+  let outstanding = 0;
+  let overdue = 0;
+  let days = 0;
+  for (const invoice of invoices) {
+    const remaining = balance(invoice);
+    const age = overdueDays(invoice, date);
+    outstanding += remaining;
+    if (age > 0) {
+      overdue += remaining;
+    }
+    if (remaining > 0) {
+      days = Math.max(days, age);
+    }
+  }
+  const broken = promises.filter((promise) => promise.status === PromiseStatus.Broken).length;
   const limit = customer?.creditLimit ?? 0;
   const utilization = limit > 0 ? (outstanding / limit) * 100 : outstanding > 0 ? 100 : 0;
   const score = Math.min(
@@ -145,7 +181,7 @@ export function formatMoney(paisa: number, compact = false): string {
     return `Rs ${(rupees / 1000).toFixed(0)}K`;
   }
 
-  return `Rs ${new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2 }).format(rupees)}`;
+  return `Rs ${moneyFormatter.format(rupees)}`;
 }
 export function toPaisa(value: string): number {
   if (!/^\d+(\.\d{1,2})?$/.test(value.trim())) {

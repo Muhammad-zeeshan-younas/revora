@@ -40,7 +40,11 @@ flowchart LR
 
 Controllers validate raw input with Zod and call services. Services coordinate permissions and business rules. Repositories own database access. Models declare columns, composite keys, foreign keys, checks, and indexes. ESLint enforces these boundaries. Module files wire the layers together.
 
+Authentication resolves the session, user identity, and current organization membership through `AuthRepository.findAuthenticatedSession()`. It does not load invoices, payments, or the full workspace to authenticate each request. The workspace mapper groups allocations and promise baselines once, preserving list order while avoiding repeated table-array scans. The API still returns a complete workspace snapshot; server-side pagination is not implemented.
+
 ## Separate tables
+
+Development fixtures and role-specific login accounts are available through `yarn db:seed`. Stop the backend first. See [SEED_GUIDE.md](../SEED_GUIDE.md) for credentials, permission scenarios, and repeat-run behavior. The CLI is in `database/seed.ts`, fixtures in `database/development-fixtures.ts`, and transactional inserts in `repositories/development-seed.repository.ts`.
 
 There is no workspace JSON column. Every collection is persisted in its own table. `WorkspaceRecord.data` is an assembled, typed response object created from table reads; it is not a database field.
 
@@ -121,18 +125,18 @@ The migration runs in a transaction. Invalid legacy records stop it rather than 
 
 ## Routes and an example
 
-| Method | Route                                                                         | Controller            |
-| ------ | ----------------------------------------------------------------------------- | --------------------- |
-| GET    | `/api/health`                                                                 | HealthController      |
-| GET    | `/api/auth/config`, `/api/auth/session`                                       | AuthController        |
-| POST   | `/api/auth/login`, `/api/auth/register`, `/api/auth/demo`, `/api/auth/logout` | AuthController        |
-| POST   | `/api/auth/invite`, `/api/auth/accept-invite`                                 | InvitationsController |
-| GET    | `/api/workspace`                                                              | WorkspaceController   |
-| POST   | `/api/workspace/commands`                                                     | WorkspaceController   |
+| Method | Route                                                   | Controller            |
+| ------ | ------------------------------------------------------- | --------------------- |
+| GET    | `/api/health`                                           | HealthController      |
+| GET    | `/api/auth/config`, `/api/auth/session`                 | AuthController        |
+| POST   | `/api/auth/login`, `/api/auth/demo`, `/api/auth/logout` | AuthController        |
+| POST   | `/api/auth/invite`, `/api/auth/accept-invite`           | InvitationsController |
+| GET    | `/api/workspace`                                        | WorkspaceController   |
+| POST   | `/api/workspace/commands`                               | WorkspaceController   |
 
 For a payment allocation, Vue posts `{ revision, command }`. The session guard determines the organization. The controller validates the command, the workspace service applies the financial rules, and the repository saves the new allocation, receipt status, invoice paid total, affected promises, and audit entry together. A stale revision returns a conflict and saves nothing.
 
-Account creation inserts organization, user, membership, settings, and initial records in one transaction. Invitation acceptance consumes the token, inserts the user/membership, and advances the revision together.
+Public registration is removed; `POST /api/auth/register` returns 404. The internal `AccountsService.createCompany()` helper inserts organization, user, membership, settings, and initial records in one transaction, but has no HTTP route. The operator setup interface and contact details will be configured later. Existing users retain sign-in, and invitation acceptance consumes the token, inserts the user/membership, and advances the revision together. Development demo creation remains gated off in production.
 
 ## Neovim and TypeScript
 

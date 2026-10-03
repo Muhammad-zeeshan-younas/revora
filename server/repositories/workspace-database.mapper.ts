@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { EntityManager, EntitySchema } from 'typeorm';
 import { workspaceSchema } from '../../shared/schema';
 import type { Workspace } from '../../shared/schema';
+import { groupBy } from '../../shared/collections';
 import type { WorkspaceRecord } from '../interfaces/workspace-record.interface';
 import { OrganizationEntity } from '../models/organization.model';
 import { UserEntity } from '../models/user.model';
@@ -55,6 +56,9 @@ export async function loadWorkspaceFromDatabase(
     manager.getRepository(MemberEntity).find({ where, order }),
     manager.getRepository(UserEntity).findBy(where),
   ]);
+  const allocationsByPayment = groupBy(allocations, (allocation) => allocation.paymentId);
+  const baselinesByPromise = groupBy(baselines, (baseline) => baseline.promiseId);
+  const usersById = new Map(users.map((user) => [user.id, user]));
   const data = workspaceSchema.parse({
     organization,
     settings,
@@ -63,17 +67,17 @@ export async function loadWorkspaceFromDatabase(
     payments: payments.map((payment) => ({
       ...payment,
       customerId: payment.customerId ?? '',
-      allocations: allocations.filter((allocation) => allocation.paymentId === payment.id),
+      allocations: allocationsByPayment.get(payment.id) ?? [],
     })),
     promises: promises.map((promise) => ({
       ...promise,
-      baselineAllocations: baselines.filter((baseline) => baseline.promiseId === promise.id),
+      baselineAllocations: baselinesByPromise.get(promise.id) ?? [],
     })),
     interactions,
     jobs,
     audit,
     members: members.map((member) => {
-      const user = users.find((candidate) => candidate.id === member.userId);
+      const user = usersById.get(member.userId);
       if (!user) {
         throw new Error('Membership references an unavailable user.');
       }

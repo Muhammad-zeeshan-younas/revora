@@ -1,3 +1,13 @@
+export enum AuthMode {
+  Login = 'login',
+  Invite = 'invite',
+}
+
+export enum RecordSort {
+  Name = 'name',
+  Balance = 'balance',
+}
+
 export enum PageId {
   Overview = 'overview',
   Customers = 'customers',

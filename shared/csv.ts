@@ -16,8 +16,17 @@ export function parseCsv(source: string): Record<string, string>[] {
       if (quoted && input[index + 1] === '"') {
         field += '"';
         index++;
+      } else if (quoted) {
+        quoted = false;
+        const next = input[index + 1];
+        if (next && ![',', '\r', '\n'].includes(next)) {
+          throw new Error('CSV has text after a closing quote.');
+        }
       } else {
-        quoted = !quoted;
+        if (field !== '') {
+          throw new Error('CSV has a quote inside an unquoted field.');
+        }
+        quoted = true;
       }
     } else if (char === ',' && !quoted) {
       row.push(field.trim());
@@ -58,16 +67,19 @@ export function parseCsv(source: string): Record<string, string>[] {
 }
 export function importCommand(kind: ImportKind, source: string, workspace: Workspace): Command {
   const rows = parseCsv(source);
+  const customers = new Map<string, string>();
+  for (const customer of workspace.customers) {
+    customers.set(customer.name.toLowerCase(), customer.id);
+    customers.set(customer.id, customer.id);
+  }
 
   function customerId(value: string): string {
-    const customer = workspace.customers.find(
-      (item) => item.name.toLowerCase() === value.toLowerCase() || item.id === value,
-    );
-    if (!customer) {
+    const id = customers.get(value.toLowerCase());
+    if (!id) {
       throw new Error(`Customer "${value}" was not found. Import customers first.`);
     }
 
-    return customer.id;
+    return id;
   }
   if (kind === ImportKind.Customers) {
     return commandSchema.parse({

@@ -45,42 +45,4 @@
   </span>
 </template>
 
-<style scoped lang="scss">
-  @use '../../styles/tokens' as *;
-
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    padding: 4px 8px;
-    font-size: 12px;
-    font-weight: 550;
-    border-radius: 5px;
-    white-space: nowrap;
-    line-height: 1.3;
-    &.green {
-      background: $success-soft;
-      color: $success;
-    }
-    &.amber {
-      background: $warning-soft;
-      color: $warning;
-    }
-    &.red {
-      background: $danger-soft;
-      color: $danger;
-    }
-    &.neutral {
-      background: $surface-soft;
-      color: $muted;
-    }
-  }
-
-  .badge-dot {
-    width: 4px;
-    height: 4px;
-    background: currentColor;
-    border-radius: 50%;
-  }
-</style>
+<style scoped lang="scss" src="./UiBadge.scss"></style>

@@ -1,4 +1,5 @@
 @use './tokens' as *;
+@use './selects';
 
 * {
   box-sizing: border-box;
@@ -21,7 +22,6 @@ body {
 
 button,
 input,
-select,
 textarea {
   font: inherit;
 }
@@ -55,7 +55,6 @@ a {
 button,
 a,
 input,
-select,
 textarea {
   &:focus-visible {
     outline: 3px solid $accent-light;
@@ -105,7 +104,6 @@ h3 {
 }
 
 input,
-select,
 textarea {
   width: 100%;
   border: 1px solid $surface-muted;
@@ -438,16 +436,6 @@ label {
     font-size: 12px;
     margin-top: 3px;
   }
-}
-
-.compact-select {
-  width: auto;
-  padding: 7px 26px 7px 9px;
-  font-size: 12px;
-  border-color: $surface-muted;
-  color: $muted;
-  border-radius: 5px;
-  background: $surface;
 }
 
 .panel-bottom-link {
@@ -866,11 +854,6 @@ tbody tr:hover {
 
 .panel-header .text-button,
 .panel-bottom-link {
-  font-size: 12px;
-  color: $ink;
-}
-
-.compact-select {
   font-size: 12px;
   color: $ink;
 }

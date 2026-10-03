@@ -4,11 +4,11 @@ import type {
   inviteResultSchema,
   inviteSchema,
   loginSchema,
-  registerSchema,
+  createCompanySchema,
 } from '../../shared/schema';
 
 export type LoginDto = z.infer<typeof loginSchema>;
-export type RegisterDto = z.infer<typeof registerSchema>;
+export type CreateCompanyDto = z.infer<typeof createCompanySchema>;
 export type CreateInvitationDto = z.infer<typeof inviteSchema>;
 export type AcceptInvitationDto = z.infer<typeof acceptInviteSchema>;
 export type InvitationResultDto = z.infer<typeof inviteResultSchema>;

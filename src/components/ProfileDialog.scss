@@ -1,0 +1,119 @@
+@use '../styles/tokens' as *;
+
+.profile-contact {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 15px;
+  color: $muted;
+  font-size: 12px;
+  > span {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+}
+
+.profile-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 15px;
+  padding: 23px 0;
+  > div {
+    padding-right: 10px;
+    border-right: 1px solid $surface-muted;
+    &:last-child {
+      border: none;
+    }
+  }
+  span {
+    font-size: 12px;
+    color: $muted;
+  }
+  strong {
+    display: block;
+    font-size: 21px;
+    font-weight: 550;
+    margin-top: 10px;
+    letter-spacing: -0.4px;
+  }
+  &.two {
+    grid-template-columns: 1fr 1fr;
+    padding-top: 0;
+  }
+}
+
+.profile-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border: 1px solid $surface-muted;
+  border-radius: 7px;
+  padding: 15px;
+  background: $surface-soft;
+  color: $muted;
+  svg {
+    flex-shrink: 0;
+  }
+  p {
+    font-size: 12px;
+    line-height: 1.8;
+  }
+}
+
+.profile-actions {
+  display: flex;
+  gap: 8px;
+  margin: 23px 0 10px;
+}
+
+.profile-tabs {
+  border-bottom: 1px solid $surface-muted;
+}
+
+.profile-history {
+  padding-top: 15px;
+  article {
+    border-bottom: 1px solid $surface-soft;
+    padding: 17px 0;
+    > div {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 15px;
+    }
+    small {
+      color: $muted;
+      font-size: 12px;
+    }
+    p {
+      font-size: 12px;
+      line-height: 1.8;
+      margin: 15px 0 12px;
+    }
+    > span {
+      color: $muted;
+      font-size: 12px;
+    }
+  }
+}
+
+@media (max-width: 760px) {
+  .profile-metrics {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    strong {
+      font-size: 20px;
+    }
+    > div:nth-child(2) {
+      border: 0;
+    }
+  }
+  .profile-actions {
+    flex-wrap: wrap;
+  }
+  .profile-history article > div {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}

@@ -1,7 +1,7 @@
 <script setup lang="ts">
   import { ImportKind } from '../../shared/enums';
 
-  import { PageId, ActionKind } from '../config/ui.enums';
+  import { PageId, ActionKind, RecordSort } from '../config/ui.enums';
 
   import {
     CustomerStatus,
@@ -10,9 +10,10 @@
     PaymentStatus,
   } from '../../shared/enums';
 
-  import { computed, ref } from 'vue';
+  import { computed, ref, watch } from 'vue';
   import type { Workspace } from '../../shared/schema';
-  import { account, balance, formatMoney, invoiceStatus, suggestMatch } from '../../shared/finance';
+  import { balance, formatMoney, invoiceStatus, suggestMatch } from '../../shared/finance';
+  import { useCustomerAccounts } from '../composables/useCustomerAccounts';
   import type { Action } from '../types';
   import Icon from '../components/ui/UiIcon.vue';
   import Badge from '../components/ui/UiBadge.vue';
@@ -28,15 +29,24 @@
   const emit = defineEmits<{ action: [action: Action] }>();
   const query = ref('');
   const filter = ref('All');
-  const sort = ref('name');
+  const sort = ref(RecordSort.Name);
   const currentPage = ref(1);
-  const customerName = (id: string): string =>
-    props.workspace.customers.find((customer) => customer.id === id)?.name ??
-    'Unidentified customer';
-  const matches = (text: string): boolean => text.toLowerCase().includes(query.value.toLowerCase());
+  const { accounts, customerName } = useCustomerAccounts(() => props.workspace);
+  const searchTerm = computed(() => query.value.trim().toLowerCase());
+  const matches = (text: string): boolean => text.toLowerCase().includes(searchTerm.value);
+  watch([query, sort, filter], () => {
+    currentPage.value = 1;
+  });
+  watch(
+    () => props.page,
+    () => {
+      filter.value = 'All';
+      query.value = '';
+      currentPage.value = 1;
+    },
+  );
   const customerRows = computed(() =>
-    props.workspace.customers
-      .map((customer) => ({ ...customer, ...account(props.workspace, customer.id) }))
+    accounts.value
       .filter(
         (customer) =>
           matches(`${customer.name} ${customer.city} ${customer.contact}`) &&
@@ -48,7 +58,9 @@
                 : customer.status === filter.value)),
       )
       .sort((a, b) =>
-        sort.value === 'balance' ? b.outstanding - a.outstanding : a.name.localeCompare(b.name),
+        sort.value === RecordSort.Balance
+          ? b.outstanding - a.outstanding
+          : a.name.localeCompare(b.name),
       ),
   );
   const invoiceRows = computed(() =>
@@ -112,8 +124,58 @@
             ? ['All', 'payment', 'invoice', 'promise', 'reminder', 'credit', 'member']
             : ['All', CustomerStatus.Active, InvoiceStatus.Overdue, CustomerStatus.OnHold],
   );
+  const tabCounts = computed(() => {
+    const counts = new Map(tabs.value.map((tab) => [tab, 0]));
+    const increment = (tab: string): void => {
+      counts.set(tab, (counts.get(tab) ?? 0) + 1);
+    };
+
+    if (props.page === PageId.Invoices) {
+      for (const invoice of props.workspace.invoices) {
+        increment('All');
+        increment(invoiceStatus(invoice));
+      }
+    } else if (props.page === PageId.Payments) {
+      for (const payment of props.workspace.payments) {
+        increment('All');
+        increment(payment.status);
+      }
+    } else if (props.page === PageId.Activity) {
+      for (const event of props.workspace.audit) {
+        for (const tab of tabs.value) {
+          if (tab === 'All' || event.action.startsWith(tab)) {
+            increment(tab);
+          }
+        }
+      }
+    } else {
+      for (const customer of accounts.value) {
+        increment('All');
+        increment(customer.status);
+        if (customer.overdue > 0) {
+          increment(InvoiceStatus.Overdue);
+        }
+        if (customer.available < 0) {
+          increment('Over limit');
+        }
+      }
+    }
+
+    return counts;
+  });
   const exposure = computed(() =>
     customerRows.value.reduce((sum, customer) => sum + customer.outstanding, 0),
+  );
+  const overLimitCount = computed(
+    () => accounts.value.filter((customer) => customer.available < 0).length,
+  );
+  const paymentSuggestions = computed(
+    () =>
+      new Map(
+        paymentRows.value
+          .slice(offset.value, offset.value + 10)
+          .map((payment) => [payment.id, suggestMatch(props.workspace, payment)]),
+      ),
   );
 
   function exportRows(): void {
@@ -204,10 +266,7 @@
     <article class="panel mini-stat">
       <span>Accounts over limit</span>
       <strong>
-        {{
-          workspace.customers.filter((customer) => account(workspace, customer.id).available < 0)
-            .length
-        }}
+        {{ overLimitCount }}
       </strong>
       <small>Review before accepting new orders</small>
     </article>
@@ -257,17 +316,7 @@
               ? `All ${page === PageId.Credit ? 'accounts' : page === PageId.Activity ? 'activity' : page}`
               : tab
           }}
-          <span v-if="tab === 'All'">
-            {{
-              page === PageId.Invoices
-                ? workspace.invoices.length
-                : page === PageId.Payments
-                  ? workspace.payments.length
-                  : page === PageId.Activity
-                    ? workspace.audit.length
-                    : workspace.customers.length
-            }}
-          </span>
+          <span>{{ tabCounts.get(tab) ?? 0 }}</span>
         </button>
       </div>
     </div>
@@ -291,8 +340,8 @@
           class="compact-select"
           aria-label="Sort customers"
         >
-          <option value="name">Name A–Z</option>
-          <option value="balance">Highest balance</option>
+          <option :value="RecordSort.Name">Name A–Z</option>
+          <option :value="RecordSort.Balance">Highest balance</option>
         </select>
         <button
           v-if="page === PageId.Customers || page === PageId.Invoices"
@@ -487,7 +536,7 @@
                 @click="emit('action', { kind: ActionKind.Match, paymentId: payment.id })"
               >
                 <Icon
-                  v-if="suggestMatch(workspace, payment)"
+                  v-if="paymentSuggestions.get(payment.id)"
                   name="sparkle"
                   :size="14"
                 />
@@ -657,128 +706,4 @@
   </div>
 </template>
 
-<style scoped lang="scss">
-  @use '../styles/tokens' as *;
-
-  .table-tools {
-    display: flex;
-    gap: 9px;
-    align-items: center;
-  }
-
-  .stacked-cell {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    font-size: 12px;
-    small {
-      font-size: 12px;
-      color: $muted;
-    }
-  }
-
-  .truncate {
-    max-width: 205px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .table-footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 15px;
-    padding: 18px 22px;
-    border-top: 1px solid $surface-muted;
-    font-size: 12px;
-    color: $muted;
-    > div {
-      display: flex;
-      gap: 14px;
-      align-items: center;
-    }
-  }
-
-  .invoice-id svg {
-    vertical-align: middle;
-    color: $muted;
-    margin-right: 7px;
-  }
-
-  .utilization {
-    min-width: 100px;
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-    font-size: 12px;
-  }
-
-  .progress-track {
-    width: 100%;
-    height: 5px;
-    background: $surface-soft;
-    border-radius: 4px;
-    i {
-      display: block;
-      height: 100%;
-      border-radius: 4px;
-      background: $accent-light;
-      &.danger {
-        background: #c89470;
-      }
-    }
-  }
-
-  .audit-detail {
-    min-width: 310px;
-    max-width: 530px;
-    svg {
-      vertical-align: middle;
-      margin-right: 8px;
-      color: $muted;
-    }
-  }
-
-  .event-code {
-    font-size: 12px;
-    border: 1px solid $surface-muted;
-    background: $surface-soft;
-    padding: 4px 6px;
-    border-radius: 4px;
-    color: $muted;
-  }
-
-  .records-panel {
-    animation: content-in 0.35s ease both;
-  }
-
-  @media (max-width: 760px) {
-    .table-tools {
-      margin-left: auto;
-    }
-    .records-panel table {
-      min-width: 700px;
-    }
-    .table-footer {
-      padding: 15px;
-      gap: 8px;
-      font-size: 12px;
-      > div {
-        gap: 8px;
-      }
-      .button {
-        font-size: 12px;
-        padding: 6px 8px;
-        svg {
-          display: none;
-        }
-      }
-    }
-  }
-
-  .stacked-cell small,
-  .table-footer {
-    color: $muted;
-  }
-</style>
+<style scoped lang="scss" src="./RecordsPage.scss"></style>

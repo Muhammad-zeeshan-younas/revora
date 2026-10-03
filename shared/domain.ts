@@ -96,14 +96,13 @@ export function applyCommand(
     case CommandType.ImportCustomers: {
       const customers =
         command.type === CommandType.CreateCustomer ? [command.customer] : command.customers;
+      const names = new Set(workspace.customers.map((item) => item.name.toLowerCase()));
       for (const customer of customers) {
-        if (
-          workspace.customers.some(
-            (item) => item.name.toLowerCase() === customer.name.toLowerCase(),
-          )
-        ) {
+        const name = customer.name.toLowerCase();
+        if (names.has(name)) {
           throw new Error(`Customer ${customer.name} already exists. No rows were imported.`);
         }
+        names.add(name);
         workspace.customers.push({ ...customer, id: crypto.randomUUID() });
       }
       detail = `${customers.length} customer account${customers.length === 1 ? '' : 's'} added`;
@@ -113,18 +112,20 @@ export function applyCommand(
     case CommandType.ImportInvoices: {
       const invoices =
         command.type === CommandType.CreateInvoice ? [command.invoice] : command.invoices;
+      const customerIds = new Set(workspace.customers.map((item) => item.id));
+      const numbers = new Set(workspace.invoices.map((item) => item.number.toLowerCase()));
       for (const invoice of invoices) {
-        customerExists(invoice.customerId);
+        if (!customerIds.has(invoice.customerId)) {
+          throw new Error('Customer does not belong to this workspace.');
+        }
         if (invoice.issuedAt > date) {
           throw new Error('Invoice date cannot be in the future.');
         }
-        if (
-          workspace.invoices.some(
-            (item) => item.number.toLowerCase() === invoice.number.toLowerCase(),
-          )
-        ) {
+        const number = invoice.number.toLowerCase();
+        if (numbers.has(number)) {
           throw new Error(`Invoice ${invoice.number} already exists. No rows were imported.`);
         }
+        numbers.add(number);
         workspace.invoices.push({ ...invoice, id: crypto.randomUUID(), paid: 0 });
       }
       detail = `${invoices.length} invoice${invoices.length === 1 ? '' : 's'} created`;
@@ -148,24 +149,24 @@ export function applyCommand(
     case CommandType.ImportPayments: {
       const payments =
         command.type === CommandType.CreatePayment ? [command.payment] : command.payments;
+      const customerIds = new Set(workspace.customers.map((item) => item.id));
+      const references = new Set(
+        workspace.payments.map((item) => `${item.bank}\u0000${item.reference.toLowerCase()}`),
+      );
       for (const payment of payments) {
-        if (payment.customerId) {
-          customerExists(payment.customerId);
+        if (payment.customerId && !customerIds.has(payment.customerId)) {
+          throw new Error('Customer does not belong to this workspace.');
         }
         if (payment.date > date) {
           throw new Error('Payment date cannot be in the future.');
         }
-        if (
-          workspace.payments.some(
-            (item) =>
-              item.bank === payment.bank &&
-              item.reference.toLowerCase() === payment.reference.toLowerCase(),
-          )
-        ) {
+        const reference = `${payment.bank}\u0000${payment.reference.toLowerCase()}`;
+        if (references.has(reference)) {
           throw new Error(
             `Reference ${payment.reference} already exists for this bank. No rows were imported.`,
           );
         }
+        references.add(reference);
         workspace.payments.push({
           ...payment,
           id: crypto.randomUUID(),

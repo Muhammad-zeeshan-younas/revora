@@ -4,6 +4,8 @@ A Vue 3 and NestJS accounts receivable workspace for Pakistani distributors, bas
 
 ## Development
 
+For persistent dummy records and a login for every role, see [SEED_GUIDE.md](SEED_GUIDE.md). With the backend stopped, run `yarn db:seed`, then `yarn dev`.
+
 Requires Node.js 22.13+ and Yarn Classic. The frontend runs at **http://127.0.0.1:5173**; the API runs at **http://127.0.0.1:3001/api**.
 
 ```powershell
@@ -15,11 +17,11 @@ yarn dev
 
 Stop the development servers with `Ctrl+C` before installing or updating dependencies. On Windows, a running Vite or tsx process can lock `esbuild.exe` and prevent installation. Use Yarn for dependency installation so `yarn.lock` stays authoritative. The npm script commands below also work as `yarn <script>`.
 
-Choose **Explore demo workspace** to create an isolated organization with fictional Pakistani customer accounts, invoices, payments, promises, and activity. The session and data survive a refresh. Each new demo entry creates a separate workspace. Register an account for an empty organization with a reusable password.
+Choose **Explore demo workspace** in development to create an isolated organization with fictional Pakistani customer accounts, invoices, payments, promises, and activity. The session and data survive a refresh. Each new demo entry creates a separate workspace. Public registration is unavailable: Revora arranges company setup manually, and existing users sign in with their provided credentials. Contact details and the operator setup interface will be configured later. Use `yarn db:seed` for reusable development accounts.
 
 ## Implemented
 
-See [TAB_GUIDE.md](TAB_GUIDE.md) for every tab's displayed information, metric definitions, examples, permissions, and edge cases.
+See [BUSINESS_GUIDE.md](BUSINESS_GUIDE.md) for a plain-English explanation of the app, its intended users, each tab, and finance terms. See [TAB_GUIDE.md](TAB_GUIDE.md) for every tab's displayed information, metric definitions, examples, permissions, and edge cases.
 
 - Vue Composition API, strict TypeScript, SCSS design tokens, Phosphor icons, and responsive navigation.
 - Receivables dashboard with calculated totals, overdue balances, collection history, balance-weighted invoice age, six aging buckets, and prioritized accounts.
@@ -29,16 +31,16 @@ See [TAB_GUIDE.md](TAB_GUIDE.md) for every tab's displayed information, metric d
 - Rule-based English and Roman Urdu promise drafts with human confirmation. Existing payment allocations are recorded as a baseline so they cannot fulfill a new promise again.
 - Bank CSV imports, duplicate detection, deterministic match suggestions, manual matching, partial payments, multiple invoice allocations, and audited reversal.
 - Credit limit review, projected order exposure warnings, and owner/admin decisions with a recorded reason.
-- Registration, hashed passwords, expiring HTTP-only sessions, logout revocation, tenant isolation, role permissions, one-use invitations, and audit history.
+- Sign-in for provisioned accounts, hashed passwords, expiring HTTP-only sessions, logout revocation, tenant isolation, role permissions, one-use invitations, and audit history.
 - Loading skeletons, save indicators, error states, conflict refresh, empty states, accessible modal focus handling, and reduced-motion support.
 - Spreadsheet-safe CSV exports and downloadable import templates.
 
 ## Project structure
 
 ```text
-src/pages/            Page composition with scoped SCSS
+src/pages/            Page composition and matching scoped SCSS files
 src/components/forms/ Focused form sections and typed models
-src/components/ui/    Reusable visual components and their scoped styles
+src/components/ui/    Reusable visual components and matching scoped SCSS files
 src/config/           Typed navigation, dialog copy, and UI enums
 src/stores/           Workspace state and financial mutations
 src/composables/      Reusable reactive behavior

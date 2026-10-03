@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Inject, Post, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { loginSchema, registerSchema } from '../../shared/schema';
+import { loginSchema } from '../../shared/schema';
 import type { Session } from '../../shared/schema';
 import type { AuthConfigDto, AuthResultDto } from '../dto/auth.dto';
 import { AccountsService } from '../services/accounts.service';
@@ -29,17 +29,6 @@ export class AuthController {
     @Res({ passthrough: true }) response: Response,
   ): Promise<AuthResultDto> {
     const userId = await this.accounts.login(loginSchema.parse(body));
-    await this.auth.issue(userId, response);
-
-    return { ok: true };
-  }
-
-  @Post('register')
-  async register(
-    @Body() body: object,
-    @Res({ passthrough: true }) response: Response,
-  ): Promise<AuthResultDto> {
-    const userId = await this.accounts.register(registerSchema.parse(body));
     await this.auth.issue(userId, response);
 
     return { ok: true };

@@ -5,7 +5,8 @@
 
   import { computed, ref } from 'vue';
   import type { Workspace } from '../../shared/schema';
-  import { account, formatMoney } from '../../shared/finance';
+  import { formatMoney } from '../../shared/finance';
+  import { useCustomerAccounts } from '../composables/useCustomerAccounts';
   import type { Action } from '../types';
   import { notify } from '../composables/useNotifications';
   import { mutate, saving } from '../stores/workspace';
@@ -18,17 +19,15 @@
   const tab = ref('queue');
   const query = ref('');
   const error = ref('');
+  const { accounts, customerName } = useCustomerAccounts(() => props.workspace);
   const queue = computed(() =>
-    props.workspace.customers
-      .map((customer) => ({ ...customer, ...account(props.workspace, customer.id) }))
+    accounts.value
       .filter(
         (customer) =>
           customer.overdue > 0 && customer.name.toLowerCase().includes(query.value.toLowerCase()),
       )
       .sort((a, b) => b.score - a.score),
   );
-  const customerName = (id: string): string =>
-    props.workspace.customers.find((customer) => customer.id === id)?.name ?? '';
 
   async function remind(customerId: string): Promise<void> {
     error.value = '';
@@ -121,12 +120,14 @@
           @click="tab = 'promises'"
         >
           Promises to pay
+          <span>{{ workspace.promises.length }}</span>
         </button>
         <button
           :class="{ active: tab === 'outbox' }"
           @click="tab = 'outbox'"
         >
           Reminder outbox
+          <span>{{ workspace.jobs.length }}</span>
         </button>
       </div>
     </div>
@@ -345,165 +346,4 @@
   </section>
 </template>
 
-<style scoped lang="scss">
-  @use '../styles/tokens' as *;
-
-  .collection-cards {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 18px;
-    padding: 0 20px 20px;
-  }
-
-  .collection-card {
-    border: 1px solid $surface-muted;
-    border-radius: 8px;
-    padding: 20px;
-    footer {
-      display: flex;
-      gap: 7px;
-      flex-wrap: wrap;
-      padding-top: 16px;
-    }
-  }
-
-  .collection-account {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    > div {
-      flex: 1;
-    }
-    p {
-      margin-top: 5px;
-      font-size: 12px;
-      color: $muted;
-    }
-  }
-
-  .collection-values {
-    display: flex;
-    gap: 20px;
-    padding: 25px 0 18px;
-    > div {
-      flex: 1;
-    }
-    span {
-      font-size: 12px;
-      color: $muted;
-      display: block;
-      margin-bottom: 8px;
-    }
-    strong {
-      font-size: 16px;
-      font-weight: 550;
-    }
-  }
-
-  .collection-reason {
-    display: flex;
-    align-items: flex-start;
-    gap: 7px;
-    background: $surface-soft;
-    padding: 14px;
-    border-radius: 5px;
-    color: $muted;
-    font-size: 12px;
-    line-height: 1.75;
-    svg {
-      flex-shrink: 0;
-    }
-  }
-
-  .outbox-list {
-    padding: 0 20px 20px;
-  }
-
-  .outbox-card {
-    padding: 20px;
-    border: 1px solid $surface-muted;
-    border-radius: 8px;
-    margin-top: 15px;
-    header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    > p {
-      line-height: 1.8;
-      color: $muted;
-      font-size: 12px;
-      padding: 16px 0;
-      max-width: 750px;
-      white-space: pre-wrap;
-    }
-    footer {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      small {
-        margin-right: auto;
-        font-size: 12px;
-        color: $muted;
-      }
-    }
-  }
-
-  @media (max-width: 1200px) {
-    .collection-cards {
-      grid-template-columns: 1fr;
-    }
-  }
-
-  @media (max-width: 760px) {
-    .collection-cards {
-      padding: 0 13px 15px;
-    }
-    .collection-card {
-      padding: 16px;
-      footer {
-        gap: 6px;
-      }
-      footer .button {
-        font-size: 12px;
-      }
-    }
-    .collection-values {
-      gap: 10px;
-      strong {
-        font-size: 15px;
-      }
-      span {
-        font-size: 12px;
-      }
-    }
-    .outbox-card footer {
-      flex-wrap: wrap;
-      small {
-        width: 100%;
-      }
-    }
-  }
-
-  @media (max-width: 390px) {
-    .collection-values strong {
-      font-size: 13px;
-    }
-  }
-
-  .collection-values span {
-    color: $muted;
-    font-size: 12px;
-  }
-
-  .collection-account p,
-  .collection-reason {
-    color: $muted;
-  }
-
-  @media (max-width: 760px) {
-    .collection-values span {
-      font-size: 12px;
-    }
-  }
-</style>
+<style scoped lang="scss" src="./CollectionsPage.scss"></style>

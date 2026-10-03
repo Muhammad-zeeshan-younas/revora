@@ -9,6 +9,7 @@
     "dev": "concurrently -k -n api,web -c green,blue \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "tsx watch --tsconfig tsconfig.api.json server/main.ts",
     "db:migrate": "tsx --tsconfig tsconfig.api.json server/database/migrate.ts",
+    "db:seed": "tsx --tsconfig tsconfig.api.json server/database/seed.ts",
     "dev:web": "vite --host 127.0.0.1",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.api.json",
     "format": "prettier --write .",

@@ -217,7 +217,7 @@ export const mutationSchema = z.object({
 });
 export type Mutation = z.infer<typeof mutationSchema>;
 export const loginSchema = z.object({ email: z.email(), password: z.string().min(1).max(128) });
-export const registerSchema = loginSchema.extend({
+export const createCompanySchema = loginSchema.extend({
   password: z.string().min(SESSION.minimumPasswordLength).max(128),
   name,
   organization: name,

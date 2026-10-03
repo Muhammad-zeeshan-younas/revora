@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { Role } from '../../shared/enums';
 import { createDemo, emptyWorkspace } from '../../shared/seed';
 import { AuthRepository } from '../repositories/auth.repository';
-import type { AuthConfigDto, LoginDto, RegisterDto } from '../dto/auth.dto';
+import type { AuthConfigDto, LoginDto, CreateCompanyDto } from '../dto/auth.dto';
 import { hashPassword, verifyPassword } from '../utils/password';
 
 @Injectable()
@@ -36,7 +36,8 @@ export class AccountsService {
     return user.id;
   }
 
-  async register(input: RegisterDto): Promise<string> {
+  /** Internal company provisioning. This operation has no public HTTP route. */
+  async createCompany(input: CreateCompanyDto): Promise<string> {
     const email = input.email.toLowerCase();
     if (await this.accounts.findUserByEmail(email)) {
       throw new BadRequestException('An account already exists for this email.');

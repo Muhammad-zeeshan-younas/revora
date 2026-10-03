@@ -28,5 +28,5 @@
     "scripts/**/*.ts",
     "e2e/**/*.ts"
   ],
-  "exclude": ["tests/api.test.ts"]
+  "exclude": ["tests/api.test.ts", "tests/import-and-race.test.ts"]
 }

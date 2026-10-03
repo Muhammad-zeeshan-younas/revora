@@ -5,6 +5,13 @@ import { NestFactory } from '@nestjs/core';
 import type { INestApplication } from '@nestjs/common';
 import { AppModule } from '../server/app.module';
 import { ApiExceptionFilter } from '../server/filters/api-exception.filter';
+import { AccountsService } from '../server/services/accounts.service';
+import { DatabaseService } from '../server/services/database.service';
+import { OrganizationEntity } from '../server/models/organization.model';
+import { UserEntity } from '../server/models/user.model';
+import { SessionEntity } from '../server/models/session.model';
+import { AuthRepository } from '../server/repositories/auth.repository';
+import { hashToken } from '../server/utils/password';
 import { snapshotSchema, inviteResultSchema } from '../shared/schema';
 import type { Command } from '../shared/schema';
 
@@ -20,12 +27,13 @@ async function post(path: string, body: object, cookie = ''): Promise<Response> 
 }
 
 async function createWorkspace(email: string): Promise<string> {
-  const response = await post('/auth/register', {
+  await app.get(AccountsService).createCompany({
     name: 'Test Owner',
     organization: 'Test Organization',
     email,
     password: 'A-long-secure-password-123',
   });
+  const response = await post('/auth/login', { email, password: 'A-long-secure-password-123' });
   expect(response.status).toBe(201);
 
   return response.headers.get('set-cookie')?.split(';')[0] ?? '';
@@ -49,6 +57,24 @@ afterAll(async () => {
   delete process.env['TEST_DATABASE'];
 });
 describe('authenticated tenant API', () => {
+  it('has no public registration endpoint and creates no account from a registration request', async () => {
+    const database = app.get(DatabaseService);
+    const counts = () =>
+      database.transaction(async (manager) => ({
+        organizations: await manager.getRepository(OrganizationEntity).count(),
+        users: await manager.getRepository(UserEntity).count(),
+      }));
+    const before = await counts();
+    const response = await post('/auth/register', {
+      name: 'Uninvited User',
+      organization: 'Unapproved Company',
+      email: 'uninvited@example.com',
+      password: 'A-long-secure-password-123',
+    });
+    expect(response.status).toBe(404);
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(await counts()).toEqual(before);
+  });
   it('rejects anonymous workspace access', async () => {
     expect((await fetch(`${url}/workspace`)).status).toBe(401);
   });
@@ -154,5 +180,16 @@ describe('authenticated tenant API', () => {
     expect(cookie).toContain('revora_session');
     await post('/auth/logout', {}, cookie);
     expect((await fetch(`${url}/workspace`, { headers: { Cookie: cookie } })).status).toBe(401);
+  });
+  it('rejects a session at its exact expiration time', async () => {
+    const cookie = await createWorkspace('expires@example.com');
+    const token = cookie.slice(cookie.indexOf('=') + 1);
+    const id = hashToken(token);
+    const expiresAt = '2026-09-12T12:00:00.000Z';
+    const database = app.get(DatabaseService);
+    await database.transaction(async (manager) => {
+      await manager.getRepository(SessionEntity).update({ id }, { expiresAt });
+    });
+    expect(await app.get(AuthRepository).findAuthenticatedSession(id, expiresAt)).toBeNull();
   });
 });

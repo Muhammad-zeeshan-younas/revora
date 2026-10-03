@@ -7,6 +7,9 @@ import type { SessionRecord } from '../models/session.model';
 import { InviteEntity } from '../models/invitation.model';
 import type { InviteRecord } from '../models/invitation.model';
 import { OrganizationEntity } from '../models/organization.model';
+import { MemberEntity } from '../models/member.model';
+import { sessionSchema } from '../../shared/schema';
+import type { Session } from '../../shared/schema';
 import type { WorkspaceRecord } from '../interfaces/workspace-record.interface';
 import { saveWorkspaceToDatabase } from './workspace-database.mapper';
 
@@ -20,12 +23,6 @@ export class AuthRepository {
     );
   }
 
-  async findUserById(id: string): Promise<UserRecord | null> {
-    return this.database.transaction((manager) =>
-      manager.getRepository(UserEntity).findOneBy({ id }),
-    );
-  }
-
   async createAccount(organization: WorkspaceRecord, user: UserRecord): Promise<void> {
     await this.database.transaction(async (manager) => {
       await manager
@@ -36,10 +33,34 @@ export class AuthRepository {
     });
   }
 
-  async findSession(id: string): Promise<SessionRecord | null> {
-    return this.database.transaction((manager) =>
-      manager.getRepository(SessionEntity).findOneBy({ id }),
-    );
+  /** Resolve current membership without loading the company's financial records. */
+  async findAuthenticatedSession(id: string, now: string): Promise<Session | null> {
+    return this.database.transaction(async (manager) => {
+      const session = await manager.getRepository(SessionEntity).findOneBy({ id });
+      if (!session || session.expiresAt <= now) {
+        return null;
+      }
+      const user = await manager.getRepository(UserEntity).findOne({
+        where: { id: session.userId },
+        select: { id: true, organizationId: true, name: true, email: true },
+      });
+      if (!user) {
+        return null;
+      }
+      const member = await manager.getRepository(MemberEntity).findOneBy({
+        organizationId: user.organizationId,
+        userId: user.id,
+      });
+      if (!member) {
+        return null;
+      }
+
+      return sessionSchema.parse({
+        user: { id: user.id, name: user.name, email: user.email, role: member.role },
+        organizationId: user.organizationId,
+        demo: session.demo,
+      });
+    }, true);
   }
 
   async saveSession(session: SessionRecord): Promise<void> {

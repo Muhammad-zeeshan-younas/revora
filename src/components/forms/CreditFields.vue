@@ -75,21 +75,4 @@
   </label>
   <p class="field-help">Owner or admin approval. This decision is recorded in the audit log.</p>
 </template>
-<style scoped lang="scss">
-  @use '../../styles/tokens' as *;
-  .profile-metrics.two {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-    margin-bottom: 24px;
-    span {
-      font-size: 12px;
-      color: $muted;
-    }
-    strong {
-      display: block;
-      font-size: 24px;
-      margin-top: 10px;
-    }
-  }
-</style>
+<style scoped lang="scss" src="./CreditFields.scss"></style>

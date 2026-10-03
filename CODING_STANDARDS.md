@@ -35,9 +35,9 @@ Keep page headings and labels in typed metadata instead of nested template terna
 
 ## Styling
 
-Indent the contents of Vue `<script>`, `<template>`, and `<style>` blocks by two spaces. Prettier enforces script and style indentation through `vueIndentScriptAndStyle`.
+Indent the contents of Vue `<script>` and `<template>` blocks by two spaces. Prettier enforces script indentation through `vueIndentScriptAndStyle`. Standalone SCSS uses two-space indentation with top-level selectors starting at column one.
 
-Keep component-specific SCSS in the component's own `<style scoped lang="scss">` block, below its template. Do not add global selectors for one page or a dialog subsection.
+Keep component-specific SCSS in a matching file beside its Vue component, such as `OverviewPage.scss`. Reference it below the template with `<style scoped lang="scss" src="./OverviewPage.scss"></style>` so Vue continues to scope selectors to the component. Do not import component styles from the script or add global selectors for one page or a dialog subsection.
 
 Only genuinely shared rules belong in `src/styles/`: design tokens, reset, typography, buttons, form controls, reusable panels and tables, accessibility utilities, and reduced-motion behavior. Components can import Sass tokens without emitting global styles.
 
@@ -50,6 +50,10 @@ The NestJS application has explicit `auth`, `workspace`, `collections`, `databas
 HTTP handlers validate request bodies. Shared financial logic implements deterministic rules; persistence checks organization identity and revision before committing the ledger and audit together. Session guards determine the tenant. Submitted customer or invoice IDs do not determine organization access.
 
 Keep all routes in `server/controllers/` and all orchestration in `server/services/`. Database queries and transactions belong in `server/repositories/`; all persisted models belong in `server/models/`. Do not create repeated layer directories inside feature folders. Controllers must not import database code or implement financial rules. See [server/README.md](server/README.md) for the complete request flow and relational schema.
+
+For customer lists, use `useCustomerAccounts()` and `customerAccounts()` to reuse computed summaries and customer lookups. Keep filtering separate from financial aggregation so typing into search does not recompute all balances. Workspace database mapping uses ordered groups for nested allocations and promise baselines.
+
+Use native labeled `<select>` elements. Shared dropdown styling lives in `src/styles/_selects.scss`: enhance with `appearance: base-select` and `::picker(select)` inside a feature query, retain plain option text and the native fallback, and preserve keyboard behavior. Avoid JavaScript listboxes for simple selections. See [MDN customizable select guidance](https://developer.mozilla.org/en-US/docs/Learn_web_development/Extensions/Forms/Customizable_select). Page-specific layouts remain in their scoped Vue styles.
 
 Use versioned migrations for schema changes; keep automatic schema synchronization disabled. Tenant relationships must include the organization ID. Money columns store integer paisa and use the safe bigint transformer. Financial row changes, concurrency revision updates, and audit entries must commit in one transaction.
 

@@ -65,18 +65,4 @@
     these details before saving.
   </p>
 </template>
-<style scoped lang="scss">
-  @use '../../styles/tokens' as *;
-  .analysis-result {
-    border-left: 2px solid $accent-light;
-    padding: 12px 15px;
-    background: $surface-soft;
-    margin-top: 15px;
-    p {
-      font-size: 12px;
-      line-height: 1.7;
-      color: $muted;
-      margin-top: 8px;
-    }
-  }
-</style>
+<style scoped lang="scss" src="./PromiseFields.scss"></style>
