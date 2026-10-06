@@ -1,24 +1,65 @@
 <script setup lang="ts">
-  import { ActionKind } from '../config/ui.enums';
-
-  import { CommandType, PromiseStatus, ReminderStatus } from '../../shared/enums';
-
-  import { computed, ref } from 'vue';
-  import type { Workspace } from '../../shared/schema';
+  import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+  import { z } from 'zod';
+  import {
+    CommandType,
+    PromiseStatus,
+    ReminderStatus,
+    Role,
+    WhatsAppDeliveryStatus,
+  } from '../../shared/enums';
   import { formatMoney } from '../../shared/finance';
-  import { useCustomerAccounts } from '../composables/useCustomerAccounts';
-  import type { Action } from '../types';
-  import { notify } from '../composables/useNotifications';
-  import { mutate, saving } from '../stores/workspace';
-  import Icon from '../components/ui/UiIcon.vue';
+  import type { Workspace } from '../../shared/schema';
   import Badge from '../components/ui/UiBadge.vue';
   import EmptyState from '../components/ui/EmptyState.vue';
+  import Icon from '../components/ui/UiIcon.vue';
+  import { useCustomerAccounts } from '../composables/useCustomerAccounts';
+  import { notify } from '../composables/useNotifications';
+  import { ActionKind } from '../config/ui.enums';
+  import { mutate, saving, snapshot } from '../stores/workspace';
+  import type { Action } from '../types';
+  import { request } from '../lib/http-client';
+  import {
+    fieldDrafts,
+    loadFieldDrafts,
+    removeFieldDraft,
+    syncFieldDrafts,
+  } from '../stores/field-drafts';
+  import type { FieldDraft } from '../stores/field-drafts';
+
+  const DELIVERY_REFRESH_MS = 30_000;
+  const deliveryResponseSchema = z.object({
+    configured: z.boolean(),
+    deliveries: z.array(
+      z.object({
+        jobId: z.string(),
+        status: z.enum(WhatsAppDeliveryStatus),
+        lastError: z.string(),
+        updatedAt: z.string(),
+      }),
+    ),
+  });
+
+  enum CollectionTab {
+    Queue = 'queue',
+    Promises = 'promises',
+    Drafts = 'drafts',
+    Outbox = 'outbox',
+  }
+
+  enum CancellationTarget {
+    Promise = 'promise',
+    Reminder = 'reminder',
+  }
 
   const props = defineProps<{ workspace: Workspace }>();
   const emit = defineEmits<{ action: [action: Action] }>();
-  const tab = ref('queue');
+  const tab = ref<CollectionTab>(CollectionTab.Queue);
   const query = ref('');
   const error = ref('');
+  const deliveryConfigured = ref(false);
+  const deliveryStatuses = ref<Record<string, { status: string; lastError: string }>>({});
+  let deliveryTimer: ReturnType<typeof setInterval> | null = null;
   const { accounts, customerName } = useCustomerAccounts(() => props.workspace);
   const queue = computed(() =>
     accounts.value
@@ -27,6 +68,23 @@
           customer.overdue > 0 && customer.name.toLowerCase().includes(query.value.toLowerCase()),
       )
       .sort((a, b) => b.score - a.score),
+  );
+  const activePromiseAmount = computed(() =>
+    props.workspace.promises
+      .filter(
+        (promise) =>
+          promise.status === PromiseStatus.Pending ||
+          promise.status === PromiseStatus.PartiallyKept,
+      )
+      .reduce((total, promise) => total + promise.amount, 0),
+  );
+  const outboxCount = computed(
+    () => props.workspace.jobs.filter((job) => job.status !== ReminderStatus.Cancelled).length,
+  );
+  const canManageReminders = computed(() =>
+    [Role.Owner, Role.Admin, Role.Accountant, Role.Collections].includes(
+      snapshot.value?.session.user.role ?? Role.Viewer,
+    ),
   );
 
   async function remind(customerId: string): Promise<void> {
@@ -39,11 +97,11 @@
     }
   }
 
-  async function cancel(id: string, kind: ActionKind.Promise | 'reminder'): Promise<void> {
+  async function cancel(id: string, kind: CancellationTarget): Promise<void> {
     error.value = '';
     try {
       await mutate(
-        kind === ActionKind.Promise
+        kind === CancellationTarget.Promise
           ? { type: CommandType.CancelPromise, promiseId: id }
           : { type: CommandType.CancelReminder, jobId: id },
       );
@@ -61,6 +119,72 @@
       error.value = 'Clipboard is unavailable. Select and copy the reminder text.';
     }
   }
+
+  async function loadDeliveries(): Promise<void> {
+    try {
+      const result = await request('/workspace/whatsapp-deliveries', deliveryResponseSchema);
+      deliveryConfigured.value = result.configured;
+      deliveryStatuses.value = Object.fromEntries(
+        result.deliveries.map((item) => [
+          item.jobId,
+          {
+            status: item.status,
+            lastError: item.lastError,
+          },
+        ]),
+      );
+    } catch {
+      // The outbox remains usable when the delivery status endpoint is unavailable.
+    }
+  }
+
+  async function retryDelivery(jobId: string): Promise<void> {
+    error.value = '';
+    try {
+      await request(
+        `/workspace/whatsapp-deliveries/${encodeURIComponent(jobId)}/retry`,
+        z.object({ ok: z.boolean() }),
+        {},
+      );
+      await loadDeliveries();
+      notify('Confirmed failed reminder queued for another attempt.');
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : 'Could not retry this reminder.';
+    }
+  }
+
+  function draftSummary(draft: FieldDraft): string {
+    if (draft.command.type === CommandType.CreatePromise) {
+      return `${customerName(draft.command.customerId)} · Promise of ${formatMoney(draft.command.amount)} due ${draft.command.date}`;
+    }
+    if (draft.command.type === CommandType.CreateInteraction) {
+      return `${customerName(draft.command.interaction.customerId)} · ${draft.command.interaction.channel}: ${draft.command.interaction.message}`;
+    }
+
+    return 'Field draft';
+  }
+
+  async function syncDrafts(): Promise<void> {
+    error.value = '';
+    try {
+      await syncFieldDrafts();
+      notify('Field drafts synced to the workspace.');
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : 'Could not sync field drafts.';
+    }
+  }
+
+  onMounted(() => {
+    loadFieldDrafts();
+    void loadDeliveries();
+    deliveryTimer = setInterval(() => void loadDeliveries(), DELIVERY_REFRESH_MS);
+  });
+
+  onBeforeUnmount(() => {
+    if (deliveryTimer) {
+      clearInterval(deliveryTimer);
+    }
+  });
 </script>
 <template>
   <div class="summary-grid">
@@ -75,27 +199,21 @@
     <article class="panel mini-stat">
       <span>Active payment promises</span>
       <strong>
-        {{
-          formatMoney(
-            workspace.promises
-              .filter(
-                (p) =>
-                  p.status === PromiseStatus.Pending || p.status === PromiseStatus.PartiallyKept,
-              )
-              .reduce((sum, p) => sum + p.amount, 0),
-            true,
-          )
-        }}
+        {{ formatMoney(activePromiseAmount, true) }}
       </strong>
       <small>Track every commitment to completion</small>
     </article>
     <article class="panel mini-stat">
       <span>Reminders in outbox</span>
       <strong>
-        {{ workspace.jobs.filter((job) => job.status !== ReminderStatus.Cancelled).length }}
+        {{ outboxCount }}
         <small>prepared or queued</small>
       </strong>
-      <small>WhatsApp delivery is not connected</small>
+      <small>
+        {{
+          deliveryConfigured ? 'WhatsApp delivery connected' : 'WhatsApp delivery is not connected'
+        }}
+      </small>
     </article>
   </div>
   <p
@@ -109,29 +227,36 @@
     <div class="records-toolbar">
       <div class="tabs">
         <button
-          :class="{ active: tab === 'queue' }"
-          @click="tab = 'queue'"
+          :class="{ active: tab === CollectionTab.Queue }"
+          @click="tab = CollectionTab.Queue"
         >
           Collection queue
           <span>{{ queue.length }}</span>
         </button>
         <button
-          :class="{ active: tab === 'promises' }"
-          @click="tab = 'promises'"
+          :class="{ active: tab === CollectionTab.Promises }"
+          @click="tab = CollectionTab.Promises"
         >
           Promises to pay
           <span>{{ workspace.promises.length }}</span>
         </button>
         <button
-          :class="{ active: tab === 'outbox' }"
-          @click="tab = 'outbox'"
+          :class="{ active: tab === CollectionTab.Drafts }"
+          @click="tab = CollectionTab.Drafts"
+        >
+          Field drafts
+          <span>{{ fieldDrafts.length }}</span>
+        </button>
+        <button
+          :class="{ active: tab === CollectionTab.Outbox }"
+          @click="tab = CollectionTab.Outbox"
         >
           Reminder outbox
           <span>{{ workspace.jobs.length }}</span>
         </button>
       </div>
     </div>
-    <template v-if="tab === 'queue'">
+    <template v-if="tab === CollectionTab.Queue">
       <div class="table-toolbar">
         <div class="search-field">
           <Icon
@@ -222,6 +347,7 @@
               Record promise
             </button>
             <button
+              v-if="canManageReminders"
               class="button small primary"
               :disabled="saving"
               @click="remind(customer.id)"
@@ -241,7 +367,7 @@
         text="No overdue accounts match this view."
       />
     </template>
-    <template v-else-if="tab === 'promises'">
+    <template v-else-if="tab === CollectionTab.Promises">
       <div class="table-wrap">
         <table>
           <thead>
@@ -267,6 +393,7 @@
               <td>
                 <button
                   v-if="
+                    canManageReminders &&
                     [
                       PromiseStatus.Pending,
                       PromiseStatus.PartiallyKept,
@@ -275,7 +402,7 @@
                   "
                   class="text-button subtle"
                   :disabled="saving"
-                  @click="cancel(promise.id, ActionKind.Promise)"
+                  @click="cancel(promise.id, CancellationTarget.Promise)"
                 >
                   Cancel
                 </button>
@@ -290,6 +417,63 @@
         text="Record customer commitments from the collection queue."
       />
     </template>
+    <template v-else-if="tab === CollectionTab.Drafts">
+      <div class="info-note inline-note">
+        <Icon
+          name="phone"
+          :size="22"
+        />
+        <p>
+          Drafts stay on this device until you sync or remove them. Keep this browser private when
+          recording customer conversations.
+        </p>
+      </div>
+      <div
+        v-if="fieldDrafts.length"
+        class="table-toolbar"
+      >
+        <strong>{{ fieldDrafts.length }} draft(s) waiting</strong>
+        <button
+          class="button small primary"
+          :disabled="saving"
+          @click="syncDrafts"
+        >
+          Sync field drafts
+        </button>
+      </div>
+      <div class="outbox-list">
+        <article
+          v-for="draft in fieldDrafts"
+          :key="draft.id"
+          class="outbox-card"
+        >
+          <header>
+            <strong>
+              {{
+                draft.command.type === CommandType.CreatePromise ? 'Payment promise' : 'Interaction'
+              }}
+            </strong>
+            <small>{{ new Date(draft.createdAt).toLocaleString('en-GB') }}</small>
+          </header>
+          <p>{{ draftSummary(draft) }}</p>
+          <footer>
+            <button
+              type="button"
+              class="text-button subtle"
+              :disabled="saving"
+              @click="removeFieldDraft(draft.id)"
+            >
+              Remove draft
+            </button>
+          </footer>
+        </article>
+      </div>
+      <EmptyState
+        v-if="!fieldDrafts.length"
+        title="No field drafts"
+        text="Log an interaction or promise and choose Save field draft when working without a connection."
+      />
+    </template>
     <template v-else>
       <div class="info-note inline-note">
         <Icon
@@ -297,8 +481,11 @@
           :size="22"
         />
         <p>
-          Reminders are prepared locally. Connect a WhatsApp Business delivery provider before
-          sending to customers. You can inspect and copy each message here.
+          {{
+            deliveryConfigured
+              ? 'Prepared reminders are sent with your approved WhatsApp template. Delivery and reply updates appear here.'
+              : 'Reminders are prepared locally. Connect a WhatsApp Business account before sending. You can inspect and copy each message here.'
+          }}
         </p>
       </div>
       <div class="outbox-list">
@@ -309,9 +496,15 @@
         >
           <header>
             <strong>{{ customerName(job.customerId) }}</strong>
-            <Badge :label="job.status" />
+            <Badge :label="deliveryStatuses[job.id]?.status ?? job.status" />
           </header>
           <p>{{ job.message }}</p>
+          <p
+            v-if="deliveryStatuses[job.id]?.lastError"
+            class="small muted"
+          >
+            {{ deliveryStatuses[job.id]?.lastError }}
+          </p>
           <footer>
             <small>
               {{ new Date(job.scheduledAt).toLocaleString('en-GB') }} · {{ job.createdBy }}
@@ -327,10 +520,26 @@
               Copy
             </button>
             <button
-              v-if="job.status !== ReminderStatus.Cancelled"
+              v-if="
+                canManageReminders &&
+                deliveryStatuses[job.id]?.status === WhatsAppDeliveryStatus.Failed
+              "
+              type="button"
+              class="text-button"
+              @click="retryDelivery(job.id)"
+            >
+              Retry send
+            </button>
+            <button
+              v-if="
+                canManageReminders &&
+                job.status !== ReminderStatus.Cancelled &&
+                (!deliveryStatuses[job.id] ||
+                  deliveryStatuses[job.id]?.status === WhatsAppDeliveryStatus.Failed)
+              "
               class="text-button subtle"
               :disabled="saving"
-              @click="cancel(job.id, 'reminder')"
+              @click="cancel(job.id, CancellationTarget.Reminder)"
             >
               Cancel
             </button>

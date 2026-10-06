@@ -15,8 +15,10 @@ export type InvitationResultDto = z.infer<typeof inviteResultSchema>;
 
 export interface AuthConfigDto {
   demoEnabled: boolean;
+  passwordResetEnabled: boolean;
 }
 
 export interface AuthResultDto {
   ok: boolean;
+  mfaRequired?: boolean;
 }

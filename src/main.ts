@@ -5,3 +5,7 @@ import '@fontsource-variable/manrope';
 import './styles/global.scss';
 
 createApp(App).mount('#app');
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  void navigator.serviceWorker.register('/sw.js');
+}

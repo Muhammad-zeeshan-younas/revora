@@ -13,7 +13,7 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], channel: 'msedge' } }],
   webServer: {
     command: 'npm run dev',
-    url: 'http://127.0.0.1:5173',
+    url: 'http://127.0.0.1:3001/api/health/ready',
     reuseExistingServer: true,
     timeout: 60000,
   },

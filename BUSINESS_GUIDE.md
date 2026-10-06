@@ -160,11 +160,11 @@ Opening a customer shows its balances, credit limit, and available credit, follo
 | Promises     | Payment commitments the team has recorded           |
 | Interactions | Notes about calls, messages, or other conversations |
 
-A salesperson name is a recorded label. It does not currently restrict which customers a Sales user can see.
+The salesperson name is a display label. In Settings, an owner or admin can also assign the customer to a Sales account. A Sales user sees only customers explicitly assigned to that account, along with those customers' invoices, receipts, promises, and interactions.
 
 Example: before calling Ali Traders, a staff member opens the profile and sees that Rs 60,000 remains unpaid, someone called yesterday, and the customer promised Rs 20,000 by Friday. This helps avoid an uninformed or repeated follow-up.
 
-The current app does not offer a general screen for editing or deleting every customer field after creation.
+The customer profile now lets staff edit contact details, name, city, tax reference, salesperson, payment terms, and active/on-hold status. Credit limits use a separate approval action. Customer deletion is not available.
 
 ### 5.3 Invoices
 
@@ -172,7 +172,7 @@ The current app does not offer a general screen for editing or deleting every cu
 
 An **invoice** is a bill asking a customer to pay for goods or services. Its **issue date** is the date it was created or issued. Its **due date** is the payment deadline. Its **reference** or invoice number identifies that specific bill.
 
-The list shows the invoice number, customer, due date, original amount, remaining balance, status, and available actions. You can create or import invoices, search, filter, export, and flag or clear a dispute with a reason.
+The list shows the invoice number, customer, due date, current amount, remaining balance, status, and available actions. You can create or import invoice records, search, filter, export, and flag or clear a dispute with a reason. Creating a record here tracks money owed; it does not issue a bill to the customer or submit one to an external system.
 
 | Status         | Meaning in this app                                                                                              |
 | -------------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -188,7 +188,7 @@ A **dispute** is a disagreement about a bill. For example, a shop might say some
 
 Overdue takes priority over partially paid as a displayed status. A late invoice for Rs 100,000 with Rs 40,000 assigned is shown as overdue, with Rs 60,000 remaining.
 
-There is no separate Partially paid filter in the current invoice tabs; those invoices appear under All. Draft and Written off are supported data states, but the app does not currently provide full workflows for publishing drafts or approving write-offs.
+There is no separate Partially paid filter in the current invoice tabs; those invoices appear under All. The Corrections action records internal amount adjustments and credit notes with reasons. A write-off request needs a different owner or admin to approve it. An approved write-off removes the outstanding amount from receivables without deleting the invoice or its history. These internal records do not issue a tax credit note; that document stays in the company's billing system. Draft publishing is still unavailable.
 
 An invoice records what should be paid. It does not prove that money has reached the bank. That is handled through Payments.
 
@@ -242,7 +242,9 @@ An **outbox** holds reminders waiting to be prepared or reviewed.
 | Prepared        | The backend has prepared it for inspection |
 | Cancelled       | The reminder job was cancelled             |
 
-The current app does not send WhatsApp reminders. Queued and Prepared do not mean sent, delivered, or read. You can inspect or copy the message text.
+Without a configured Meta WhatsApp Business account, reminders remain local and can be inspected or copied. With a configured pilot account, an approved three-variable template, and recorded customer consent, a prepared reminder can be sent automatically. Delivery status appears separately as sending, accepted by Meta, sent, delivered, read, failed, or unknown. An unknown outcome is held for review instead of being resent automatically. Confirmed failures can be retried by staff. Replies are recorded in the customer interaction history when the sender phone uniquely identifies a customer. The local preview text may differ from the approved Meta template.
+
+The Field drafts tab keeps a conversation note or payment promise on the current device while the page is open without a connection. Staff sync drafts after reconnecting. A disconnected page reload is not yet supported, and a draft is not a saved company record until sync succeeds.
 
 Reminder text can include the full outstanding balance, including money not yet overdue or under dispute. Review the text before using it with a customer.
 
@@ -254,7 +256,7 @@ The outbox tab includes all its entries, including historical and cancelled ones
 
 A **payment receipt** is a record of money received. A bank **transaction reference** helps identify a particular transfer. Recording the receipt and deciding which bill it pays are two separate steps.
 
-**Reconciliation** means checking records against one another and making sure they agree. In this app, payment reconciliation mainly means connecting recorded receipts to invoices.
+**Reconciliation** means checking records against one another and making sure they agree. Revora supports both allocating recorded receipts to invoices and reviewing a bank statement CSV against recorded receipts, allocations, dates, and the opening-to-closing balance. The latter stores exceptions for review; it does not replace reconciliation of an accounting general ledger.
 
 **Allocation** means assigning a specific amount from a receipt to a specific invoice. This is the action that reduces the invoice's unpaid balance.
 
@@ -305,7 +307,7 @@ The tabs show All accounts, Over limit, and Overdue. Over limit means debt is gr
 
 The summary named Total credit extended adds approved limits, including unused capacity. It is not the amount of money actually paid out or owed.
 
-The current credit check is a decision aid. Invoice creation does not automatically enforce the limit, and entering a proposed order does not place a real order. A person must make and carry out the sales decision.
+The projected-order check in Credit management is a decision aid and does not place an order. The separate Orders & stock page can reserve stock and credit for an actual internal order. Direct invoice creation checks existing order holds; fulfillment releases the hold and creates the receivable. These are internal records, not statutory sales documents.
 
 ### 5.7 Activity center
 
@@ -334,7 +336,7 @@ These controls are in the top-right avatar menu.
 
 **Permissions** are rules about which actions a user is allowed to perform. A **role** is a named set of those permissions, such as Accountant or Viewer.
 
-Reminder settings include the preparation time, daily limit, and a message template. A **template** is reusable text with placeholders. For example, `{{customer}}` is replaced with the customer's name. Reminder scheduling prepares local work while the backend is running; it does not enable live WhatsApp delivery.
+Reminder settings include the preparation time, daily limit, and a local message template. A **template** is reusable text with placeholders. For example, `{{customer}}` is replaced with the customer's name. Live WhatsApp delivery also needs a separately approved Meta template and provider configuration.
 
 An invitation creates a private, single-use link for a teammate. Invitation email delivery is not connected, so the link must be shared separately.
 
@@ -344,18 +346,18 @@ An invitation creates a private, single-use link for a teammate. Invitation emai
 
 ## 6. Who uses which features inside a company?
 
-| App role    | Likely person                                                          | Current access                                                                                                   |
-| ----------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Owner       | Business owner or person responsible for the workspace                 | Financial work, collection work, credit/settings changes, invitations, and changes to non-owner team roles       |
-| Admin       | Trusted finance or operations manager                                  | Financial work, collection work, credit/settings changes, and invitations; cannot change team roles or ownership |
-| Accountant  | Person who maintains bills and receipts                                | Customer, invoice, payment, and collection actions; cannot change credit limits, settings, or team roles         |
-| Collections | Staff who contact customers about unpaid bills                         | Record conversations and promises, cancel promises, and queue or cancel reminders                                |
-| Sales       | Salesperson checking customer balances before discussing more business | Read-only workspace access in the current version                                                                |
-| Viewer      | Manager or colleague who only needs to inspect records                 | Read-only workspace access                                                                                       |
+| App role    | Likely person                                          | Current access                                                                                                   |
+| ----------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| Owner       | Business owner or person responsible for the workspace | Financial work, collection work, credit/settings changes, invitations, and changes to non-owner team roles       |
+| Admin       | Trusted finance or operations manager                  | Financial work, collection work, credit/settings changes, and invitations; cannot change team roles or ownership |
+| Accountant  | Person who maintains bills and receipts                | Customer, invoice, payment, and collection actions; cannot change credit limits, settings, or team roles         |
+| Collections | Staff who contact customers about unpaid bills         | Record conversations and promises, cancel promises, and queue or cancel reminders                                |
+| Sales       | Salesperson following up their assigned accounts       | Only explicitly assigned customers are visible; can record interactions and payment promises for those customers |
+| Viewer      | Manager or colleague who only needs to inspect records | Read-only workspace access                                                                                       |
 
 **Read-only** means a user can inspect information without saving changes. Some action buttons can still be visible to a user who lacks permission; the backend rejects an unauthorized change.
 
-Sales and Viewer users can currently see customers across their own organization. The app does not restrict Sales users to only the customers assigned to their salesperson label.
+Viewer users can inspect their organization's records. Sales assignments use authenticated member IDs in Settings rather than the free-text salesperson label. Sales users have an empty customer view until an owner or admin assigns accounts.
 
 Team roles apply within the company's workspace. A company is not intended to see another company's records. Inviting a customer as a teammate is therefore different from giving that customer a restricted customer portal.
 
@@ -398,16 +400,18 @@ International businesses could be a future audience, but additional currencies, 
 
 ## 9. Current capabilities and future possibilities
 
-| Area            | What the current app does                                          | What should not be assumed                                                  |
-| --------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------- |
-| Customer debt   | Records invoices, remaining balances, due dates, and disputes      | A complete accounting package covering every business account               |
-| Follow-up       | Stores conversation notes, promises, priorities, and reminder text | Automatic delivery of messages or automatic phone calls                     |
-| WhatsApp        | Prepares reminders in a local outbox                               | Connected sending, delivery confirmation, or reply capture                  |
-| Reply assistant | Uses local English/Roman Urdu rules to draft some promise details  | A connected AI model that fully understands every message                   |
-| Payments        | Records/imports receipts and supports reviewed invoice matching    | Collecting money online, issuing bank refunds, or a live bank feed          |
-| Credit          | Compares debt with approved limits and records decisions           | Lending money, guaranteeing repayment, or automatically blocking all orders |
-| Data exchange   | Imports and exports CSV files                                      | Direct synchronization with banks or accounting systems                     |
-| Company access  | Sign-in for provided accounts and invitations for teammates        | Open self-service registration or a customer payment portal                 |
+| Area                  | What the current app does                                                  | What should not be assumed                                                    |
+| --------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Customer debt         | Records invoices, remaining balances, due dates, and disputes              | A complete accounting package covering every business account                 |
+| Follow-up             | Stores conversation notes, promises, priorities, and reminder text         | Automatic phone calls                                                         |
+| WhatsApp              | Optional Meta Cloud API sender and signed delivery/reply webhook           | Live delivery before a provider account, approved template, and consent exist |
+| Reply assistant       | Uses local English/Roman Urdu rules to draft some promise details          | A connected AI model that fully understands every message                     |
+| Payments              | Records/imports receipts and supports reviewed invoice matching            | Collecting money online, issuing bank refunds, or a live bank feed            |
+| Credit                | Compares debt with approved limits and records decisions                   | Lending money, guaranteeing repayment, or automatically blocking all orders   |
+| Orders and stock      | Reserves internal stock and credit, then records an invoice on fulfillment | A full purchasing, warehouse, or statutory invoicing system                   |
+| Documents and reports | Stores supporting PDFs/images and calculates monthly collection measures   | Replacing the source invoice or a general ledger                              |
+| Data exchange         | Imports and exports CSV files                                              | Direct synchronization with banks or accounting systems                       |
+| Company access        | Sign-in for provided accounts and invitations for teammates                | Open self-service registration or a customer payment portal                   |
 
 An **ERP** is business software that may manage orders, stock, accounting, and other company operations together. Revora currently exchanges files rather than directly connecting to an ERP.
 
@@ -415,7 +419,7 @@ Future work could include live messaging, direct bank/accounting connections, st
 
 **Working capital** is the money a business uses to keep everyday operations moving, such as buying stock and paying staff while waiting for customers to pay. Better collections can support that process, but the current Revora app does not provide working-capital loans.
 
-The app is currently a development pilot. A **pilot** is an early version used to explore and validate the workflow. Production use still needs work such as password recovery, stronger account protection, managed backups, and operational monitoring.
+The app is currently a development pilot. A **pilot** is an early version used to explore and validate the workflow. Password recovery and email verification need a configured sending domain. Authenticator MFA needs an encryption key. Production use still needs managed backups, secrets, and operational alert delivery.
 
 ## 10. How a business could judge whether it is useful
 
@@ -429,7 +433,7 @@ These are evaluation questions, not promised results or figures already measured
 - Are credit-limit changes backed by a clear reason?
 - Is less staff time spent finding information and repeating follow-ups?
 
-Useful measures include overdue money, receipts waiting for matching, time spent matching payments, and commitments fulfilled by their deadline. Some of these require separate analysis; they are not all existing dashboard reports.
+The Overview shows overdue money, unallocated receipts and their value, receipts waiting at least seven days, and the number of due promises kept by their deadline. Time spent matching payments and other measures still require separate analysis.
 
 Before judging results, the business needs a consistent process for keeping invoices, payment dates, allocations, and conversation notes up to date. An incomplete record can make a paid customer look unpaid or make a promise appear unfulfilled.
 

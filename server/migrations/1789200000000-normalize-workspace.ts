@@ -81,8 +81,8 @@ export class NormalizeWorkspace1789200000000 implements MigrationInterface {
       await runner.manager.getRepository(UserEntity).insert(user);
     }
     for (const record of snapshots) {
-      await saveWorkspaceToDatabase(runner.manager, record.data);
-      const restored = await loadWorkspaceFromDatabase(runner.manager, record.id);
+      await saveWorkspaceToDatabase(runner.manager, record.data, false);
+      const restored = await loadWorkspaceFromDatabase(runner.manager, record.id, false);
       if (!restored || !isDeepStrictEqual(restored, record)) {
         throw new Error(
           'Relational data differs from the legacy workspace. Migration stopped without committing.',

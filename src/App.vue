@@ -1,44 +1,82 @@
 <script setup lang="ts">
-  import { ImportKind } from '../shared/enums';
-
-  import { PageId, ActionKind } from './config/ui.enums';
-
-  import { navigation, pageMetadata } from './config/navigation';
-  import { PaymentStatus, PromiseStatus } from '../shared/enums';
-
-  import { computed, onMounted, onBeforeUnmount, ref } from 'vue';
   import { onClickOutside } from '@vueuse/core';
+  import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
   import { z } from 'zod';
-  import { request } from './lib/http-client';
-  import { download } from './lib/download';
-  import { toast, notify } from './composables/useNotifications';
-  import { loadWorkspace, loading, loadError, snapshot } from './stores/workspace';
+  import { FINANCE } from '../shared/constants';
   import { csvExport } from '../shared/csv';
+  import { ImportKind, PaymentStatus, PromiseStatus, Role } from '../shared/enums';
   import { balance, invoiceStatus, today } from '../shared/finance';
-  import type { Action, Page } from './types';
-  import Icon from './components/ui/UiIcon.vue';
+  import { customerSchema } from '../shared/schema';
+  import type { Customer } from '../shared/schema';
   import AuthScreen from './components/AuthScreen.vue';
+  import Icon from './components/ui/UiIcon.vue';
   import Skeleton from './components/ui/LoadingSkeleton.vue';
+  import { toast, notify } from './composables/useNotifications';
+  import { navigation, pageMetadata } from './config/navigation';
+  import { ActionKind, PageId } from './config/ui.enums';
+  import { download } from './lib/download';
+  import { request } from './lib/http-client';
+  import CollectionsPage from './pages/CollectionsPage.vue';
   import Dashboard from './pages/OverviewPage.vue';
   import RecordsPage from './pages/RecordsPage.vue';
-  import CollectionsPage from './pages/CollectionsPage.vue';
   import SettingsPage from './pages/SettingsPage.vue';
-  import ActionDialog from './components/ActionDialog.vue';
-  import ProfileDialog from './components/ProfileDialog.vue';
+  import {
+    loadWorkspace,
+    loadBootstrapWorkspace,
+    loading,
+    loadError,
+    markPendingOfflineLogout,
+    offlineMode,
+    snapshot,
+    workspaceComplete,
+  } from './stores/workspace';
+  import {
+    clearOfflineKey,
+    disableOfflineAccount,
+    offlineAccounts,
+    unlockOfflineAccount,
+  } from './stores/offline-account';
+  import { clearFieldDrafts } from './stores/field-drafts';
+  import type { Action, Page } from './types';
+
+  const SEARCH_RESULT_LIMIT = 5;
+  const ActionDialog = defineAsyncComponent(() => import('./components/ActionDialog.vue'));
+  const InvoiceCorrectionDialog = defineAsyncComponent(
+    () => import('./components/InvoiceCorrectionDialog.vue'),
+  );
+  const BankReconciliationDialog = defineAsyncComponent(
+    () => import('./components/BankReconciliationDialog.vue'),
+  );
+  const AttachmentsDialog = defineAsyncComponent(
+    () => import('./components/AttachmentsDialog.vue'),
+  );
+  const ManagementReportDialog = defineAsyncComponent(
+    () => import('./components/ManagementReportDialog.vue'),
+  );
+  const OrdersPage = defineAsyncComponent(() => import('./pages/OrdersPage.vue'));
+  const ProfileDialog = defineAsyncComponent(() => import('./components/ProfileDialog.vue'));
 
   const page = ref<Page>(PageId.Overview);
   const mobileOpen = ref(false);
   const action = ref<Action | null>(null);
   const search = ref('');
+  const remoteSearchResults = ref<Customer[]>([]);
+  const remoteSearchLoading = ref(false);
   const searchOpen = ref(false);
   const notificationsOpen = ref(false);
   const accountMenuOpen = ref(false);
   const accountMenu = ref<HTMLElement | null>(null);
   const accountButton = ref<HTMLButtonElement | null>(null);
-  onClickOutside(accountMenu, () => {
-    accountMenuOpen.value = false;
-  });
   const initialized = ref(false);
+  const offlineOptions = ref<{ key: string; label: string; savedAt: string }[]>([]);
+  const offlineSelected = ref('');
+  const offlinePassphrase = ref('');
+  const offlineUnlockError = ref('');
+  const canEditFinance = computed(() =>
+    [Role.Owner, Role.Admin, Role.Accountant].includes(
+      snapshot.value?.session.user.role ?? Role.Viewer,
+    ),
+  );
   const title = computed(() =>
     page.value === PageId.Settings
       ? 'Settings'
@@ -48,26 +86,71 @@
     day: 'numeric',
     month: 'long',
     year: 'numeric',
-    timeZone: 'Asia/Karachi',
+    timeZone: FINANCE.timezone,
   }).format(new Date());
   const unmatched = computed(
     () =>
-      snapshot.value?.workspace.payments.filter((payment) =>
-        [PaymentStatus.Unmatched, PaymentStatus.Partial].includes(payment.status),
-      ).length ?? 0,
+      workspaceComplete.value
+        ? (snapshot.value?.workspace.payments.filter((payment) =>
+            [PaymentStatus.Unmatched, PaymentStatus.Partial].includes(payment.status),
+          ).length ?? 0)
+        : null,
   );
   const searchResults = computed(() => {
     if (!snapshot.value || search.value.length < 2) {
       return [];
     }
 
-    return snapshot.value.workspace.customers
+    return (workspaceComplete.value ? snapshot.value.workspace.customers : remoteSearchResults.value)
       .filter((customer) =>
         `${customer.name} ${customer.contact} ${customer.city}`
           .toLowerCase()
           .includes(search.value.toLowerCase()),
       )
-      .slice(0, 5);
+      .slice(0, SEARCH_RESULT_LIMIT);
+  });
+
+  function pagedRecords(value: Page): boolean {
+    return [PageId.Customers, PageId.Invoices, PageId.Payments].includes(value);
+  }
+
+  watch([search, workspaceComplete], (_value, _oldValue, onCleanup) => {
+    remoteSearchResults.value = [];
+    remoteSearchLoading.value = false;
+    const term = search.value.trim();
+    if (term.length < 2 || workspaceComplete.value || offlineMode.value) {return;}
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      remoteSearchLoading.value = true;
+      try {
+        const result = await request(
+          `/workspace/records/customers?search=${encodeURIComponent(term)}&limit=${SEARCH_RESULT_LIMIT}`,
+          z.object({ items: z.array(customerSchema) }),
+        );
+        if (!cancelled) {remoteSearchResults.value = result.items;}
+      } catch {
+        if (!cancelled) {remoteSearchResults.value = [];}
+      } finally {
+        if (!cancelled) {remoteSearchLoading.value = false;}
+      }
+    }, 250);
+    onCleanup(() => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    });
+  });
+
+  watch(page, () => {
+    if (page.value !== PageId.Overview && !pagedRecords(page.value) && snapshot.value && !workspaceComplete.value && !offlineMode.value) {
+      void loadWorkspace();
+    }
+  });
+
+  watch(action, async (requested) => {
+    if (!requested || requested.kind === ActionKind.Help || workspaceComplete.value || offlineMode.value) {return;}
+    action.value = null;
+    await loadWorkspace();
+    if (workspaceComplete.value) {action.value = requested;}
   });
 
   function navigate(next: Page): void {
@@ -110,23 +193,22 @@
       accountMenuOpen.value = false;
     }
   }
-  onMounted(async () => {
-    readHash();
-    window.addEventListener('hashchange', readHash);
-    window.addEventListener('keydown', keyboard);
-    await loadWorkspace();
-    initialized.value = true;
-  });
-  onBeforeUnmount(() => {
-    window.removeEventListener('hashchange', readHash);
-    window.removeEventListener('keydown', keyboard);
-  });
 
   async function logout(): Promise<void> {
     accountMenuOpen.value = false;
     try {
-      await request('/auth/logout', z.object({ ok: z.boolean() }), {});
+      if (!offlineMode.value) {
+        await request('/auth/logout', z.object({ ok: z.boolean() }), {});
+      } else {
+        markPendingOfflineLogout();
+      }
+      clearFieldDrafts();
+      if (snapshot.value) {disableOfflineAccount(snapshot.value);}
+      clearOfflineKey();
       snapshot.value = null;
+      workspaceComplete.value = false;
+      offlineMode.value = false;
+      offlineOptions.value = [];
       action.value = null;
       navigate(PageId.Overview);
     } catch {
@@ -134,7 +216,22 @@
     }
   }
 
-  function exportReport(): void {
+  async function unlockOffline(): Promise<void> {
+    offlineUnlockError.value = '';
+    try {
+      snapshot.value = await unlockOfflineAccount(offlineSelected.value, offlinePassphrase.value);
+      workspaceComplete.value = true;
+      offlineMode.value = true;
+      loadError.value = '';
+      offlinePassphrase.value = '';
+    } catch (cause) {
+      offlineUnlockError.value =
+        cause instanceof Error ? cause.message : 'Could not unlock offline account.';
+    }
+  }
+
+  async function exportReport(): Promise<void> {
+    if (!workspaceComplete.value && !offlineMode.value) {await loadWorkspace();}
     if (!snapshot.value) {
       return;
     }
@@ -166,6 +263,26 @@
     );
     notify('Receivables report exported.');
   }
+
+  onClickOutside(accountMenu, () => {
+    accountMenuOpen.value = false;
+  });
+
+  onMounted(async () => {
+    readHash();
+    window.addEventListener('hashchange', readHash);
+    window.addEventListener('keydown', keyboard);
+    if (page.value === PageId.Overview) {await loadBootstrapWorkspace();}
+    else {await loadWorkspace();}
+    offlineOptions.value = offlineAccounts();
+    offlineSelected.value = offlineOptions.value[0]?.key ?? '';
+    initialized.value = true;
+  });
+
+  onBeforeUnmount(() => {
+    window.removeEventListener('hashchange', readHash);
+    window.removeEventListener('keydown', keyboard);
+  });
 </script>
 <template>
   <div
@@ -199,6 +316,44 @@
     >
       Try again
     </button>
+    <form
+      v-if="offlineOptions.length"
+      class="offline-unlock"
+      @submit.prevent="unlockOffline"
+    >
+      <h3>Open saved field accounts</h3>
+      <select
+        v-model="offlineSelected"
+        aria-label="Offline account"
+      >
+        <option
+          v-for="option in offlineOptions"
+          :key="option.key"
+          :value="option.key"
+        >
+          {{ option.label }}
+        </option>
+      </select>
+      <input
+        v-model="offlinePassphrase"
+        type="password"
+        autocomplete="off"
+        placeholder="Offline passphrase"
+        aria-label="Offline passphrase"
+      />
+      <button
+        class="button"
+        type="submit"
+      >
+        Unlock offline view
+      </button>
+      <p
+        v-if="offlineUnlockError"
+        role="alert"
+      >
+        {{ offlineUnlockError }}
+      </p>
+    </form>
   </div>
   <div
     v-else
@@ -357,7 +512,8 @@
                 </span>
                 <Icon name="right" />
               </button>
-              <p v-if="!searchResults.length">No customers found.</p>
+              <p v-if="remoteSearchLoading">Searching…</p>
+              <p v-else-if="!searchResults.length">No customers found.</p>
             </div>
           </div>
           <span
@@ -384,7 +540,7 @@
               <button @click="navigate(PageId.Payments)">
                 <Icon name="payments" />
                 <span>
-                  <strong>{{ unmatched }} payments to review</strong>
+                  <strong>{{ unmatched === null ? 'Payments to review' : `${unmatched} payments to review` }}</strong>
                   <small>Match incoming funds to open invoices.</small>
                 </span>
                 <Icon name="right" />
@@ -393,11 +549,9 @@
                 <Icon name="clock" />
                 <span>
                   <strong>
-                    {{
-                      snapshot.workspace.promises.filter((p) => p.status === PromiseStatus.Broken)
-                        .length
-                    }}
-                    broken promises
+                    {{ workspaceComplete
+                      ? `${snapshot.workspace.promises.filter((p) => p.status === PromiseStatus.Broken).length} broken promises`
+                      : 'Promises to review' }}
                   </strong>
                   <small>Check your collection queue.</small>
                 </span>
@@ -477,6 +631,20 @@
         class="main-content"
       >
         <div
+          v-if="offlineMode"
+          class="error-banner"
+          role="status"
+        >
+          Offline account view. Figures are from the last saved copy. Reconnect to sync drafts and
+          refresh accounts.
+          <button
+            class="text-button"
+            @click="loadWorkspace"
+          >
+            Reconnect
+          </button>
+        </div>
+        <div
           v-if="loadError"
           class="error-banner"
           role="alert"
@@ -504,6 +672,13 @@
             </div>
             <div class="heading-actions">
               <button
+                v-if="canEditFinance && page === PageId.Overview"
+                class="button"
+                @click="action = { kind: ActionKind.ManagementReport }"
+              >
+                Management report
+              </button>
+              <button
                 v-if="page === PageId.Overview"
                 class="button"
                 @click="exportReport"
@@ -515,7 +690,7 @@
                 Export report
               </button>
               <button
-                v-if="[PageId.Overview, PageId.Invoices].includes(page)"
+                v-if="canEditFinance && [PageId.Overview, PageId.Invoices].includes(page)"
                 class="button primary"
                 @click="action = { kind: ActionKind.Invoice }"
               >
@@ -526,7 +701,7 @@
                 New invoice
               </button>
               <button
-                v-else-if="page === PageId.Customers"
+                v-else-if="canEditFinance && page === PageId.Customers"
                 class="button primary"
                 @click="action = { kind: ActionKind.Customer }"
               >
@@ -537,7 +712,7 @@
                 Add customer
               </button>
               <button
-                v-else-if="page === PageId.Payments"
+                v-else-if="canEditFinance && page === PageId.Payments"
                 class="button primary"
                 @click="action = { kind: ActionKind.Import, importKind: ImportKind.Payments }"
               >
@@ -576,11 +751,16 @@
             @action="action = $event"
           />
           <RecordsPage
-            v-else
+            v-else-if="page !== PageId.Orders"
             :key="page"
             :page="page"
             :workspace="snapshot.workspace"
+            :remote="pagedRecords(page) && !workspaceComplete && !offlineMode"
             @action="action = $event"
+          />
+          <OrdersPage
+            v-else
+            :workspace="snapshot.workspace"
           />
           <footer class="content-footer">
             <span>
@@ -601,6 +781,28 @@
       :workspace="snapshot.workspace"
       @close="action = null"
       @action="action = $event"
+    />
+    <InvoiceCorrectionDialog
+      v-else-if="action?.kind === ActionKind.InvoiceCorrection"
+      :action="action"
+      :session="snapshot.session"
+      :workspace="snapshot.workspace"
+      @close="action = null"
+    />
+    <BankReconciliationDialog
+      v-else-if="action?.kind === ActionKind.BankReconciliation"
+      :workspace="snapshot.workspace"
+      @close="action = null"
+    />
+    <AttachmentsDialog
+      v-else-if="action?.kind === ActionKind.Attachments"
+      :action="action"
+      :role="snapshot.session.user.role"
+      @close="action = null"
+    />
+    <ManagementReportDialog
+      v-else-if="action?.kind === ActionKind.ManagementReport"
+      @close="action = null"
     />
     <ActionDialog
       v-else-if="action"

@@ -1,6 +1,8 @@
 # Revora
 
-A Vue 3 and NestJS accounts receivable workspace for Pakistani distributors, based on the MVP priorities in [Revora.md](../Revora.md).
+A Vue 3 and NestJS accounts receivable workspace for Pakistani distributors. It tracks existing invoices, customer debt, incoming payments, and collection follow-ups, based on the MVP priorities in [Revora.md](../Revora.md).
+
+See [the implementation review](IMPLEMENTATION_REVIEW.md) for completed and remaining work, and [integration choices](INTEGRATION_CHOICES.md) for recommended provider setup.
 
 ## Development
 
@@ -25,12 +27,15 @@ See [BUSINESS_GUIDE.md](BUSINESS_GUIDE.md) for a plain-English explanation of th
 
 - Vue Composition API, strict TypeScript, SCSS design tokens, Phosphor icons, and responsive navigation.
 - Receivables dashboard with calculated totals, overdue balances, collection history, balance-weighted invoice age, six aging buckets, and prioritized accounts.
-- Customers, profiles, search, filtering, credit exposure, salesperson assignment, and payment terms.
+- Customers, editable profiles, search, filtering, credit exposure, salesperson assignment, and payment terms.
 - Invoice creation and CSV imports; open, overdue, partial, paid, and disputed invoice views.
 - Collection queue, interaction history, local scheduled reminder preparation, communication templates, daily limits, cancellation, and promises to pay.
 - Rule-based English and Roman Urdu promise drafts with human confirmation. Existing payment allocations are recorded as a baseline so they cannot fulfill a new promise again.
 - Bank CSV imports, duplicate detection, deterministic match suggestions, manual matching, partial payments, multiple invoice allocations, and audited reversal.
 - Credit limit review, projected order exposure warnings, and owner/admin decisions with a recorded reason.
+- Internal orders that reserve stock and customer credit, release both on cancellation, and create a receivable on fulfillment.
+- Supporting PDF/image attachments for customers, invoices, and payments; monthly DSO and collection-effectiveness reports.
+- Optional encrypted offline Sales account view, field drafts, authenticator MFA, and email verification.
 - Sign-in for provisioned accounts, hashed passwords, expiring HTTP-only sessions, logout revocation, tenant isolation, role permissions, one-use invitations, and audit history.
 - Loading skeletons, save indicators, error states, conflict refresh, empty states, accessible modal focus handling, and reduced-motion support.
 - Spreadsheet-safe CSV exports and downloadable import templates.
@@ -70,7 +75,7 @@ Amounts are integer **paisa**, not floating-point rupees. CSV and form amounts a
 
 All workspace commands run against a copy of the tenant's state. The full update, including ledger changes and audit evidence, commits with a conditional revision check. Stale revisions receive HTTP 409 instead of overwriting newer work. The tenant ID comes from the authenticated session, never from the submitted financial command.
 
-The local default is a persistent SQL.js SQLite file at `data/revora.sqlite`. PostgreSQL is supported through TypeORM using `DATABASE_URL`. Fifteen related tables store organizations, identities, memberships, settings, customers, invoices, payments, allocations, promises, baselines, interactions, reminders, and audit events. Financial changes and their audit entries commit in one revision-checked transaction. A versioned migration converts existing workspace JSON records and verifies that they reconstruct identically before removing the legacy tables. See the [backend and database guide](server/README.md) for the table map and relationships.
+The local default is a persistent SQL.js SQLite file at `data/revora.sqlite`. PostgreSQL is supported through TypeORM using `DATABASE_URL`. Related tables store the financial ledger, identities, approvals, reconciliation reports, assignments, reminder delivery, and audit events. Financial changes and their audit entries commit in one revision-checked transaction. A versioned migration converts existing workspace JSON records and verifies that they reconstruct identically before removing the legacy tables. See the [backend and database guide](server/README.md) for the table map and relationships.
 
 The displayed average outstanding age is balance-weighted invoice age, **not accounting DSO**. Collection history includes approved allocations and excludes reversed payments. Match confidence is a deterministic heuristic, not a calibrated statistical probability.
 
@@ -78,12 +83,12 @@ The displayed average outstanding age is balance-weighted invoice age, **not acc
 
 This is a local development pilot, not a completed production financial platform. The UI labels the following boundaries explicitly:
 
-- **WhatsApp:** durable local outbox with scheduled preparation. No live delivery, webhook receipt, or external messages are sent. Replies can be recorded manually.
+- **WhatsApp:** Meta Cloud API integration code supports approved-template sending for one pilot company, consent, signed webhooks, delivery states, reply capture, and controlled retry. No external message is sent until provider settings and customer consent exist.
 - **AI:** deterministic reply parsing and account summaries. No LLM provider is connected; extraction requires human review.
 - **ERP and banks:** CSV exchange. No direct feeds or ERP credentials are required.
-- **Invitations:** a private copyable link; email delivery is not configured.
+- **Invitations:** a private copyable link; email delivery works when a verified sending domain and Resend credentials are configured.
 
-Production work still includes live WhatsApp and LLM adapters, MFA, password recovery/email verification, managed encryption and backups, retention, reporting optimization, operational monitoring, and a durable distributed job queue. Do not expose this pilot publicly or import live financial records until these requirements are addressed.
+Production work still includes live WhatsApp account activation and verification, selecting a managed PostgreSQL provider and testing backup restores, configuring managed secrets and a verified email domain, completing the remaining bounded database reads, and hosting the operations monitor with an alert receiver. Production startup checks the MFA key and account email settings. The reminder scheduler has a database lease across app instances. Password reset requires `APP_ORIGIN`, `RESEND_API_KEY`, and `EMAIL_FROM` with a verified sending domain. Do not expose this pilot publicly or import live financial records until these requirements are addressed.
 
 The broader financing, native apps, advanced analytics, and international expansion in the brief are deliberately outside its MVP scope.
 
@@ -94,6 +99,10 @@ npm run dev          Vue and NestJS development servers
 npm run dev:web      Vue only
 npm run dev:api      NestJS only
 npm run db:migrate   Apply database migrations and report table counts
+npm run db:backup -- --offline-confirmed   Verify and copy the local SQL.js database after stopping the app
+npm run monitor      Poll operations and deliver alerts from a separate process
+npm run monitor:once Run one operations poll
+npm run benchmark:records  Measure cursor pages and full snapshot on a test database
 npm run typecheck    Strict Vue and server compilation checks
 npm run lint         TypeScript and Vue coding standards
 npm run format       Format the project
@@ -104,12 +113,12 @@ npm test             Domain and API tests
 npm run test:e2e     Browser workflow tests (Microsoft Edge)
 ```
 
-**Test execution is paused at the user's request.** Test sources are included but have not been verified by a completed run. A first attempt was blocked by the Windows sandbox. Type checking passed during development.
+The implementation review records the completed unit and browser test runs for the current pilot.
 
 In Windows managed environments, Vite/esbuild and tsx may need permission to run outside the filesystem sandbox. No permission is required by the application itself.
 
 ## Environment
 
-See `.env.example`. `DEMO_ENABLED=true` is development-only and is ignored when `NODE_ENV=production`. The production cookie uses the Secure flag and requires HTTPS. `APP_ORIGIN` must match the frontend origin exactly. Provision the PostgreSQL schema before setting `DB_SYNCHRONIZE=false`; automatic synchronization is intended for development only.
+See `.env.example` and [production operations](PRODUCTION_OPERATIONS.md). `DEMO_ENABLED=true` is development-only and is ignored when `NODE_ENV=production`. The production cookie uses the Secure flag and requires HTTPS. `APP_ORIGIN` must match the frontend origin exactly. Schema synchronization is disabled; versioned migrations run at backend startup and through `npm run db:migrate`.
 
 Reference documentation: [Vue TypeScript](https://vuejs.org/guide/typescript/composition-api), [NestJS authentication](https://docs.nestjs.com/security/authentication), [TypeORM](https://typeorm.io/docs/getting-started/).

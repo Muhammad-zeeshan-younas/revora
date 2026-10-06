@@ -24,6 +24,12 @@ export const navigation: readonly NavigationItem[] = [
   { page: PageId.Customers, label: 'Customers', icon: 'users', group: NavigationGroup.Workspace },
   { page: PageId.Invoices, label: 'Invoices', icon: 'invoice', group: NavigationGroup.Workspace },
   {
+    page: PageId.Orders,
+    label: 'Orders & stock',
+    icon: 'package',
+    group: NavigationGroup.Workspace,
+  },
+  {
     page: PageId.Collections,
     label: 'Collections',
     icon: 'wallet',
@@ -56,6 +62,10 @@ export const pageMetadata: Record<Page, PageMetadata> = {
   invoices: {
     title: 'Invoices',
     description: 'Keep every invoice accounted for, from issued to settled.',
+  },
+  orders: {
+    title: 'Orders & stock',
+    description: 'Reserve stock and credit together, then dispatch with an invoice.',
   },
   collections: {
     title: 'Collections',

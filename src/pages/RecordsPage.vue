@@ -1,162 +1,273 @@
 <script setup lang="ts">
-  import { ImportKind } from '../../shared/enums';
-
-  import { PageId, ActionKind, RecordSort } from '../config/ui.enums';
-
+  import { computed, ref, watch } from 'vue';
+  import { CollectionPriority } from '../../shared/enums';
+  import { recordPageSchema } from '../../shared/record-page';
+  import type { RecordPageResponse } from '../../shared/record-page';
+  import { csvExport } from '../../shared/csv';
   import {
+    AttachmentTarget,
     CustomerStatus,
+    ImportKind,
     InteractionOutcome,
     InvoiceStatus,
     PaymentStatus,
+    Role,
   } from '../../shared/enums';
-
-  import { computed, ref, watch } from 'vue';
-  import type { Workspace } from '../../shared/schema';
   import { balance, formatMoney, invoiceStatus, suggestMatch } from '../../shared/finance';
-  import { useCustomerAccounts } from '../composables/useCustomerAccounts';
-  import type { Action } from '../types';
-  import Icon from '../components/ui/UiIcon.vue';
+  import type { Customer, Invoice, Payment, Workspace } from '../../shared/schema';
   import Badge from '../components/ui/UiBadge.vue';
   import EmptyState from '../components/ui/EmptyState.vue';
-  import { download } from '../lib/download';
+  import Icon from '../components/ui/UiIcon.vue';
+  import { useCustomerAccounts } from '../composables/useCustomerAccounts';
   import { notify } from '../composables/useNotifications';
-  import { csvExport } from '../../shared/csv';
+  import { ActionKind, PageId, RecordSort } from '../config/ui.enums';
+  import { download } from '../lib/download';
+  import { request } from '../lib/http-client';
+  import type { Action } from '../types';
+  import { snapshot } from '../stores/workspace';
+
+  enum RecordFilter {
+    All = 'All',
+    OverLimit = 'Over limit',
+  }
+
+  enum ActivityFilter {
+    Payment = 'payment',
+    Invoice = 'invoice',
+    Promise = 'promise',
+    Reminder = 'reminder',
+    Credit = 'credit',
+    Member = 'member',
+  }
+
+  type RecordPage =
+    PageId.Customers | PageId.Invoices | PageId.Payments | PageId.Credit | PageId.Activity;
+
+  const PAGE_SIZE = 10;
+  const FILTER_TABS: Record<RecordPage, readonly string[]> = {
+    [PageId.Customers]: [
+      RecordFilter.All,
+      CustomerStatus.Active,
+      InvoiceStatus.Overdue,
+      CustomerStatus.OnHold,
+    ],
+    [PageId.Invoices]: [
+      RecordFilter.All,
+      InvoiceStatus.Open,
+      InvoiceStatus.Overdue,
+      InvoiceStatus.Paid,
+      InvoiceStatus.Disputed,
+    ],
+    [PageId.Payments]: [
+      RecordFilter.All,
+      PaymentStatus.Unmatched,
+      PaymentStatus.Partial,
+      PaymentStatus.Matched,
+      PaymentStatus.Reversed,
+    ],
+    [PageId.Credit]: [RecordFilter.All, RecordFilter.OverLimit, InvoiceStatus.Overdue],
+    [PageId.Activity]: [
+      RecordFilter.All,
+      ActivityFilter.Payment,
+      ActivityFilter.Invoice,
+      ActivityFilter.Promise,
+      ActivityFilter.Reminder,
+      ActivityFilter.Credit,
+      ActivityFilter.Member,
+    ],
+  };
 
   const props = defineProps<{
     workspace: Workspace;
-    page: PageId.Customers | PageId.Invoices | PageId.Payments | PageId.Credit | PageId.Activity;
+    page: RecordPage;
+    remote?: boolean;
   }>();
   const emit = defineEmits<{ action: [action: Action] }>();
   const query = ref('');
-  const filter = ref('All');
+  const filter = ref<string>(RecordFilter.All);
   const sort = ref(RecordSort.Name);
   const currentPage = ref(1);
-  const { accounts, customerName } = useCustomerAccounts(() => props.workspace);
-  const searchTerm = computed(() => query.value.trim().toLowerCase());
-  const matches = (text: string): boolean => text.toLowerCase().includes(searchTerm.value);
-  watch([query, sort, filter], () => {
+  const { accounts: localAccounts, customerName: localCustomerName } = useCustomerAccounts(
+    () => props.workspace,
+  );
+  const remotePage = ref<RecordPageResponse | null>(null);
+  const remoteLoading = ref(false);
+  const remoteError = ref('');
+  const cursorStack = ref<number[]>([-1]);
+  let remoteRequest = 0;
+  const remoteItems = computed(() => remotePage.value?.items ?? []);
+  const accounts = computed(() =>
+    props.remote
+      ? remoteItems.value
+          .filter((item): item is Customer => 'name' in item)
+          .map((customer) => ({
+            ...customer,
+            ...(remotePage.value?.customerSummaries[customer.id] ?? {
+              outstanding: 0,
+              overdue: 0,
+              days: 0,
+              broken: 0,
+              utilization: 0,
+              available: customer.creditLimit,
+              score: 0,
+              priority: CollectionPriority.Normal,
+            }),
+          }))
+      : localAccounts.value,
+  );
+
+  function customerName(id: string): string {
+    return remotePage.value?.customerNames[id] ?? localCustomerName(id);
+  }
+
+  async function loadRemote(cursor = -1): Promise<void> {
+    if (!props.remote) {return;}
+    const requestNumber = ++remoteRequest;
+    remoteLoading.value = true;
+    remotePage.value = null;
+    remoteError.value = '';
+    const params = new URLSearchParams({
+      cursor: String(cursor),
+      limit: String(PAGE_SIZE),
+      search: query.value.trim(),
+      status: filter.value === RecordFilter.All ? '' : filter.value,
+    });
+    try {
+      const result = await request(`/workspace/records/${props.page}?${params}`, recordPageSchema);
+      if (requestNumber === remoteRequest) {remotePage.value = result;}
+    } catch (cause) {
+      if (requestNumber === remoteRequest) {
+        remotePage.value = null;
+        remoteError.value = cause instanceof Error ? cause.message : 'Could not load records.';
+      }
+    } finally {
+      if (requestNumber === remoteRequest) {remoteLoading.value = false;}
+    }
+  }
+
+  function nextRemotePage(): void {
+    const cursor = remotePage.value?.nextCursor;
+    if (cursor === null || cursor === undefined) {return;}
+    cursorStack.value.push(cursor);
+    currentPage.value++;
+    void loadRemote(cursor);
+  }
+
+  function previousRemotePage(): void {
+    if (currentPage.value <= 1) {return;}
+    cursorStack.value.pop();
+    currentPage.value--;
+    void loadRemote(cursorStack.value.at(-1) ?? -1);
+  }
+
+  watch([() => props.remote, () => props.page, query, filter], (_value, _oldValue, onCleanup) => {
+    remoteRequest++;
+    remotePage.value = null;
+    cursorStack.value = [-1];
     currentPage.value = 1;
-  });
-  watch(
-    () => props.page,
-    () => {
-      filter.value = 'All';
-      query.value = '';
-      currentPage.value = 1;
-    },
+    if (!props.remote) {return;}
+    const timer = window.setTimeout(() => void loadRemote(), query.value ? 250 : 0);
+    onCleanup(() => window.clearTimeout(timer));
+  }, { immediate: true });
+  const searchTerm = computed(() => query.value.trim().toLowerCase());
+  const canEditFinance = computed(() =>
+    [Role.Owner, Role.Admin, Role.Accountant].includes(
+      snapshot.value?.session.user.role ?? Role.Viewer,
+    ),
   );
   const customerRows = computed(() =>
-    accounts.value
+    (props.remote ? accounts.value : accounts.value
       .filter(
         (customer) =>
           matches(`${customer.name} ${customer.city} ${customer.contact}`) &&
-          (filter.value === 'All' ||
-            (filter.value === InvoiceStatus.Overdue
-              ? customer.overdue > 0
-              : filter.value === 'Over limit'
-                ? customer.available < 0
-                : customer.status === filter.value)),
+          matchesCustomerFilter(customer),
       )
       .sort((a, b) =>
         sort.value === RecordSort.Balance
           ? b.outstanding - a.outstanding
           : a.name.localeCompare(b.name),
-      ),
+      )),
   );
   const invoiceRows = computed(() =>
-    props.workspace.invoices
+    (props.remote
+      ? remoteItems.value.filter((item): item is Invoice => 'number' in item)
+      : props.workspace.invoices
       .filter(
         (invoice) =>
           matches(`${invoice.number} ${customerName(invoice.customerId)}`) &&
-          (filter.value === 'All' || invoiceStatus(invoice) === filter.value),
+          (filter.value === RecordFilter.All || invoiceStatus(invoice) === filter.value),
       )
-      .sort((a, b) => a.dueAt.localeCompare(b.dueAt)),
+      .sort((a, b) => a.dueAt.localeCompare(b.dueAt))),
   );
   const paymentRows = computed(() =>
-    props.workspace.payments
+    (props.remote
+      ? remoteItems.value.filter((item): item is Payment => 'date' in item)
+      : props.workspace.payments
       .filter(
         (payment) =>
           matches(
             `${payment.reference} ${payment.description} ${customerName(payment.customerId)}`,
           ) &&
-          (filter.value === 'All' || payment.status === filter.value),
+          (filter.value === RecordFilter.All || payment.status === filter.value),
       )
-      .sort((a, b) => b.date.localeCompare(a.date)),
+      .sort((a, b) => b.date.localeCompare(a.date))),
   );
   const auditRows = computed(() =>
     props.workspace.audit.filter(
       (event) =>
         matches(`${event.detail} ${event.actor}`) &&
-        (filter.value === 'All' || event.action.startsWith(filter.value)),
+        (filter.value === RecordFilter.All || event.action.startsWith(filter.value)),
     ),
   );
-  const count = computed(() =>
-    props.page === PageId.Invoices
-      ? invoiceRows.value.length
-      : props.page === PageId.Payments
-        ? paymentRows.value.length
-        : props.page === PageId.Activity
-          ? auditRows.value.length
-          : customerRows.value.length,
-  );
-  const pages = computed(() => Math.max(1, Math.ceil(count.value / 10)));
-  const offset = computed(() => (Math.min(currentPage.value, pages.value) - 1) * 10);
-  const tabs = computed(() =>
-    props.page === PageId.Invoices
-      ? [
-          'All',
-          InvoiceStatus.Open,
-          InvoiceStatus.Overdue,
-          InvoiceStatus.Paid,
-          InvoiceStatus.Disputed,
-        ]
-      : props.page === PageId.Payments
-        ? [
-            'All',
-            PaymentStatus.Unmatched,
-            PaymentStatus.Partial,
-            PaymentStatus.Matched,
-            PaymentStatus.Reversed,
-          ]
-        : props.page === PageId.Credit
-          ? ['All', 'Over limit', InvoiceStatus.Overdue]
-          : props.page === PageId.Activity
-            ? ['All', 'payment', 'invoice', 'promise', 'reminder', 'credit', 'member']
-            : ['All', CustomerStatus.Active, InvoiceStatus.Overdue, CustomerStatus.OnHold],
-  );
+  const count = computed(() => {
+    switch (props.page) {
+      case PageId.Invoices:
+        return invoiceRows.value.length;
+      case PageId.Payments:
+        return paymentRows.value.length;
+      case PageId.Activity:
+        return auditRows.value.length;
+      default:
+        return customerRows.value.length;
+    }
+  });
+  const pages = computed(() => Math.max(1, Math.ceil(count.value / PAGE_SIZE)));
+  const offset = computed(() => props.remote ? 0 : (Math.min(currentPage.value, pages.value) - 1) * PAGE_SIZE);
+  const tabs = computed(() => FILTER_TABS[props.page]);
   const tabCounts = computed(() => {
     const counts = new Map(tabs.value.map((tab) => [tab, 0]));
     const increment = (tab: string): void => {
       counts.set(tab, (counts.get(tab) ?? 0) + 1);
     };
 
+    if (props.remote) {return counts;}
     if (props.page === PageId.Invoices) {
       for (const invoice of props.workspace.invoices) {
-        increment('All');
+        increment(RecordFilter.All);
         increment(invoiceStatus(invoice));
       }
     } else if (props.page === PageId.Payments) {
       for (const payment of props.workspace.payments) {
-        increment('All');
+        increment(RecordFilter.All);
         increment(payment.status);
       }
     } else if (props.page === PageId.Activity) {
       for (const event of props.workspace.audit) {
         for (const tab of tabs.value) {
-          if (tab === 'All' || event.action.startsWith(tab)) {
+          if (tab === RecordFilter.All || event.action.startsWith(tab)) {
             increment(tab);
           }
         }
       }
     } else {
       for (const customer of accounts.value) {
-        increment('All');
+        increment(RecordFilter.All);
         increment(customer.status);
         if (customer.overdue > 0) {
           increment(InvoiceStatus.Overdue);
         }
         if (customer.available < 0) {
-          increment('Over limit');
+          increment(RecordFilter.OverLimit);
         }
       }
     }
@@ -173,10 +284,30 @@
     () =>
       new Map(
         paymentRows.value
-          .slice(offset.value, offset.value + 10)
+          .slice(offset.value, offset.value + PAGE_SIZE)
           .map((payment) => [payment.id, suggestMatch(props.workspace, payment)]),
       ),
   );
+
+  function matches(text: string): boolean {
+    return text.toLowerCase().includes(searchTerm.value);
+  }
+
+  function matchesCustomerFilter(customer: (typeof accounts.value)[number]): boolean {
+    if (filter.value === RecordFilter.All) {
+      return true;
+    }
+
+    if (filter.value === InvoiceStatus.Overdue) {
+      return customer.overdue > 0;
+    }
+
+    if (filter.value === RecordFilter.OverLimit) {
+      return customer.available < 0;
+    }
+
+    return customer.status === filter.value;
+  }
 
   function exportRows(): void {
     if (props.page === PageId.Customers || props.page === PageId.Credit) {
@@ -238,8 +369,21 @@
         ),
       );
     }
-    notify('Filtered report exported.');
+    notify(props.remote ? 'Current page exported.' : 'Filtered report exported.');
   }
+
+  watch([query, sort, filter], () => {
+    currentPage.value = 1;
+  });
+
+  watch(
+    () => props.page,
+    () => {
+      filter.value = RecordFilter.All;
+      query.value = '';
+      currentPage.value = 1;
+    },
+  );
 </script>
 <template>
   <div
@@ -312,11 +456,11 @@
           "
         >
           {{
-            tab === 'All'
+            tab === RecordFilter.All
               ? `All ${page === PageId.Credit ? 'accounts' : page === PageId.Activity ? 'activity' : page}`
               : tab
           }}
-          <span>{{ tabCounts.get(tab) ?? 0 }}</span>
+          <span v-if="!remote">{{ tabCounts.get(tab) ?? 0 }}</span>
         </button>
       </div>
     </div>
@@ -334,8 +478,16 @@
         />
       </div>
       <div class="table-tools">
+        <button
+          v-if="page === PageId.Payments && canEditFinance"
+          type="button"
+          class="button small"
+          @click="emit('action', { kind: ActionKind.BankReconciliation })"
+        >
+          Reconcile statement
+        </button>
         <select
-          v-if="page === PageId.Customers || page === PageId.Credit"
+          v-if="!remote && (page === PageId.Customers || page === PageId.Credit)"
           v-model="sort"
           class="compact-select"
           aria-label="Sort customers"
@@ -367,9 +519,14 @@
             name="download"
             :size="16"
           />
-          Export
+          {{ remote ? 'Export page' : 'Export' }}
         </button>
       </div>
+    </div>
+    <p v-if="remoteLoading" role="status">Loading records…</p>
+    <div v-if="remoteError" class="error-banner" role="alert">
+      {{ remoteError }}
+      <button class="text-button" @click="loadRemote(cursorStack.at(-1) ?? -1)">Retry</button>
     </div>
     <div class="table-wrap">
       <table v-if="page === PageId.Customers">
@@ -386,7 +543,7 @@
         </thead>
         <tbody>
           <tr
-            v-for="(customer, index) in customerRows.slice(offset, offset + 10)"
+            v-for="(customer, index) in customerRows.slice(offset, offset + PAGE_SIZE)"
             :key="customer.id"
           >
             <td>
@@ -447,7 +604,7 @@
         </thead>
         <tbody>
           <tr
-            v-for="invoice in invoiceRows.slice(offset, offset + 10)"
+            v-for="invoice in invoiceRows.slice(offset, offset + PAGE_SIZE)"
             :key="invoice.id"
           >
             <td class="strong invoice-id">
@@ -473,7 +630,31 @@
             <td><Badge :label="invoiceStatus(invoice)" /></td>
             <td>
               <button
-                v-if="balance(invoice) > 0"
+                type="button"
+                class="text-button subtle"
+                @click="
+                  emit('action', {
+                    kind: ActionKind.Attachments,
+                    target: AttachmentTarget.Invoice,
+                    targetId: invoice.id,
+                    label: invoice.number,
+                  })
+                "
+              >
+                Documents
+              </button>
+              <button
+                v-if="canEditFinance"
+                type="button"
+                class="text-button subtle"
+                @click="
+                  emit('action', { kind: ActionKind.InvoiceCorrection, invoiceId: invoice.id })
+                "
+              >
+                Corrections
+              </button>
+              <button
+                v-if="canEditFinance && balance(invoice) > 0"
                 class="text-button"
                 @click="emit('action', { kind: ActionKind.Dispute, invoiceId: invoice.id })"
               >
@@ -482,7 +663,7 @@
                 }}
               </button>
               <span
-                v-else
+                v-else-if="balance(invoice) <= 0"
                 class="muted"
               >
                 Settled
@@ -504,7 +685,7 @@
         </thead>
         <tbody>
           <tr
-            v-for="payment in paymentRows.slice(offset, offset + 10)"
+            v-for="payment in paymentRows.slice(offset, offset + PAGE_SIZE)"
             :key="payment.id"
           >
             <td>
@@ -527,6 +708,20 @@
             <td class="number strong">{{ formatMoney(payment.amount) }}</td>
             <td><Badge :label="payment.status" /></td>
             <td>
+              <button
+                type="button"
+                class="text-button subtle"
+                @click="
+                  emit('action', {
+                    kind: ActionKind.Attachments,
+                    target: AttachmentTarget.Payment,
+                    targetId: payment.id,
+                    label: payment.reference,
+                  })
+                "
+              >
+                Documents
+              </button>
               <button
                 v-if="
                   payment.status === PaymentStatus.Unmatched ||
@@ -572,7 +767,7 @@
         </thead>
         <tbody>
           <tr
-            v-for="customer in customerRows.slice(offset, offset + 10)"
+            v-for="customer in customerRows.slice(offset, offset + PAGE_SIZE)"
             :key="customer.id"
           >
             <td>
@@ -623,7 +818,7 @@
         </thead>
         <tbody>
           <tr
-            v-for="event in auditRows.slice(offset, offset + 10)"
+            v-for="event in auditRows.slice(offset, offset + PAGE_SIZE)"
             :key="event.id"
           >
             <td class="audit-detail">
@@ -651,20 +846,34 @@
       </table>
     </div>
     <EmptyState
-      v-if="!count"
-      :title="query || filter !== 'All' ? 'No matching results' : 'Your next chapter starts here'"
+      v-if="!count && !remoteLoading && !remoteError"
+      :title="
+        query || filter !== RecordFilter.All
+          ? 'No matching results'
+          : 'Your next chapter starts here'
+      "
       :text="
-        query || filter !== 'All'
+        query || filter !== RecordFilter.All
           ? 'Try another search or choose a different filter.'
           : 'Add your first record or import a CSV to get started.'
       "
     />
     <footer class="table-footer">
-      <span>
-        Showing {{ count ? offset + 1 : 0 }}–{{ Math.min(offset + 10, count) }} of
+      <span v-if="remote">Page {{ currentPage }} · {{ count }} results</span>
+      <span v-else>
+        Showing {{ count ? offset + 1 : 0 }}–{{ Math.min(offset + PAGE_SIZE, count) }} of
         {{ count }} results
       </span>
-      <div>
+      <div v-if="remote">
+        <button class="button small" :disabled="currentPage <= 1 || remoteLoading" @click="previousRemotePage">
+          <Icon name="back" :size="15" /> Previous
+        </button>
+        <span>{{ currentPage }}</span>
+        <button class="button small" :disabled="!remotePage || remotePage.nextCursor === null || remoteLoading" @click="nextRemotePage">
+          Next <Icon name="arrow" :size="15" />
+        </button>
+      </div>
+      <div v-else>
         <button
           class="button small"
           :disabled="currentPage <= 1"

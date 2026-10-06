@@ -4,22 +4,33 @@ import {
   Inject,
   Injectable,
   UnauthorizedException,
+  ServiceUnavailableException,
+  Logger,
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { Role } from '../../shared/enums';
+import { SESSION } from '../../shared/constants';
 import { createDemo, emptyWorkspace } from '../../shared/seed';
 import { AuthRepository } from '../repositories/auth.repository';
 import type { AuthConfigDto, LoginDto, CreateCompanyDto } from '../dto/auth.dto';
 import { hashPassword, verifyPassword } from '../utils/password';
+import { hashToken } from '../utils/password';
+import { EmailService } from './email.service';
+import { EmailVerificationService } from './email-verification.service';
 
 @Injectable()
 export class AccountsService {
-  constructor(@Inject(AuthRepository) private readonly accounts: AuthRepository) {}
+  constructor(
+    @Inject(AuthRepository) private readonly accounts: AuthRepository,
+    @Inject(EmailService) private readonly email: EmailService,
+    @Inject(EmailVerificationService) private readonly emailVerification: EmailVerificationService,
+  ) {}
 
   config(): AuthConfigDto {
     return {
       demoEnabled:
         process.env['DEMO_ENABLED'] === 'true' && process.env['NODE_ENV'] !== 'production',
+      passwordResetEnabled: this.email.configured(),
     };
   }
 
@@ -32,8 +43,52 @@ export class AccountsService {
     if (!user || !valid) {
       throw new UnauthorizedException('Email or password is incorrect.');
     }
+    if (this.email.configured() && !(await this.emailVerification.verified(user.id))) {
+      await this.emailVerification.request(user.email);
+      throw new ForbiddenException(
+        'Verify your email using the link sent to your inbox before signing in.',
+      );
+    }
 
     return user.id;
+  }
+
+  async requestPasswordReset(email: string): Promise<void> {
+    if (!this.email.configured()) {
+      throw new ServiceUnavailableException('Account email is not configured.');
+    }
+    const user = await this.accounts.findUserByEmail(email.toLowerCase());
+    if (!user) {
+      return;
+    }
+    const token = randomBytes(32).toString('hex');
+    const id = hashToken(token);
+    await this.accounts.savePasswordReset(
+      id,
+      user.id,
+      new Date(Date.now() + SESSION.passwordResetDurationMs).toISOString(),
+    );
+    const link = `${process.env['APP_ORIGIN'] ?? 'http://127.0.0.1:5173'}/?reset=${token}`;
+    try {
+      await this.email.sendPasswordReset(user.email, link, id);
+    } catch (error) {
+      await this.accounts.deletePasswordReset(id);
+      Logger.error(
+        error instanceof Error ? error.message : 'Password reset email failed.',
+        'AccountEmail',
+      );
+    }
+  }
+
+  async completePasswordReset(token: string, password: string): Promise<void> {
+    const consumed = await this.accounts.consumePasswordReset(
+      hashToken(token),
+      hashPassword(password),
+      new Date().toISOString(),
+    );
+    if (!consumed) {
+      throw new BadRequestException('Password reset link is invalid or expired.');
+    }
   }
 
   /** Internal company provisioning. This operation has no public HTTP route. */

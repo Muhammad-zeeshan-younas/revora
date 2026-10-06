@@ -12,11 +12,16 @@ import {
 import { offsetDate, today } from './finance';
 import type { Workspace } from './schema';
 
+const DEMO_EMAIL_NAME_FILTER_PATTERN = /[^a-z]/g;
+
 export function emptyWorkspace(organizationId: string, name: string): Workspace {
   return {
     organization: { id: organizationId, name, currency: 'PKR', timezone: 'Asia/Karachi' },
     customers: [],
     invoices: [],
+    invoiceCorrections: [],
+    writeOffRequests: [],
+    bankReconciliations: [],
     payments: [],
     promises: [],
     interactions: [],
@@ -32,6 +37,7 @@ export function emptyWorkspace(organizationId: string, name: string): Workspace 
     },
   };
 }
+
 export function createDemo(organizationId: string, now = new Date()): Workspace {
   const date = today(now);
   const workspace = emptyWorkspace(organizationId, 'Atlas Distributors');
@@ -61,7 +67,7 @@ export function createDemo(organizationId: string, now = new Date()): Workspace 
       contact,
       city,
       creditLimit: creditLimit * 100,
-      email: `${name.toLowerCase().replaceAll(/[^a-z]/g, '')}@example.com`,
+      email: `${name.toLowerCase().replaceAll(DEMO_EMAIL_NAME_FILTER_PATTERN, '')}@example.com`,
       phone: `+9230012345${String(index).padStart(2, '0')}`,
       taxId: `NTN-${710001 + index}`,
       salesperson: index % 2 === 0 ? 'Adeel Khan' : 'Sana Malik',

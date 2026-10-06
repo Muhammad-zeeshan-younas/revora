@@ -12,6 +12,7 @@ export enum PageId {
   Overview = 'overview',
   Customers = 'customers',
   Invoices = 'invoices',
+  Orders = 'orders',
   Collections = 'collections',
   Payments = 'payments',
   Credit = 'credit',
@@ -21,6 +22,7 @@ export enum PageId {
 
 export enum ActionKind {
   Customer = 'customer',
+  EditCustomer = 'editCustomer',
   Invoice = 'invoice',
   Payment = 'payment',
   Import = 'import',
@@ -31,6 +33,10 @@ export enum ActionKind {
   Match = 'match',
   Reverse = 'reverse',
   Dispute = 'dispute',
+  InvoiceCorrection = 'invoiceCorrection',
+  BankReconciliation = 'bankReconciliation',
+  Attachments = 'attachments',
+  ManagementReport = 'managementReport',
   Invite = 'invite',
   Help = 'help',
 }

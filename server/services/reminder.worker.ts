@@ -11,10 +11,13 @@ import {
 } from '@nestjs/common';
 
 import { WorkspaceRepository } from '../repositories/workspace.repository';
+import { MonitoringService } from './monitoring.service';
 
 import { applyCommand, refreshPromises } from '../../shared/domain';
 
 import { today } from '../../shared/finance';
+
+const REMINDER_WORKER_LEASE = 'reminder-scheduler';
 
 @Injectable()
 export class ReminderWorker implements OnModuleInit, OnModuleDestroy {
@@ -22,7 +25,10 @@ export class ReminderWorker implements OnModuleInit, OnModuleDestroy {
 
   private running = false;
 
-  constructor(@Inject(WorkspaceRepository) private readonly workspaces: WorkspaceRepository) {}
+  constructor(
+    @Inject(WorkspaceRepository) private readonly workspaces: WorkspaceRepository,
+    @Inject(MonitoringService) private readonly monitoring: MonitoringService,
+  ) {}
 
   onModuleInit(): void {
     this.timer = setInterval(() => {
@@ -42,9 +48,39 @@ export class ReminderWorker implements OnModuleInit, OnModuleDestroy {
     if (this.running) {
       return;
     }
+
     this.running = true;
+    const ownerToken = crypto.randomUUID();
+    let leaseAcquired = false;
+    let leaseLost = false;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+    let runError: string | null = null;
+
     try {
-      const organizations = await this.workspaces.findAll();
+      leaseAcquired = await this.workspaces.acquireWorkerLease(
+        REMINDER_WORKER_LEASE,
+        ownerToken,
+        COLLECTIONS.workerLeaseMs,
+      );
+      if (!leaseAcquired) {
+        return;
+      }
+      await this.monitoring.workerStarted(REMINDER_WORKER_LEASE);
+
+      heartbeat = setInterval(
+        () => {
+          void this.workspaces
+            .renewWorkerLease(REMINDER_WORKER_LEASE, ownerToken, COLLECTIONS.workerLeaseMs)
+            .then((renewed) => {
+              leaseLost ||= !renewed;
+            })
+            .catch(() => {
+              leaseLost = true;
+            });
+        },
+        Math.floor(COLLECTIONS.workerLeaseMs / 3),
+      );
+
       const hour = Number(
         new Intl.DateTimeFormat('en-GB', {
           timeZone: FINANCE.timezone,
@@ -52,7 +88,22 @@ export class ReminderWorker implements OnModuleInit, OnModuleDestroy {
           hourCycle: 'h23',
         }).format(new Date()),
       );
-      for (const organization of organizations) {
+      const candidateIds = await this.workspaces.findReminderCandidateIds(hour);
+      for (const organizationId of candidateIds) {
+        if (leaseLost) {
+          break;
+        }
+        const leaseRenewed = await this.workspaces.renewWorkerLease(
+          REMINDER_WORKER_LEASE,
+          ownerToken,
+          COLLECTIONS.workerLeaseMs,
+        );
+        if (!leaseRenewed) {
+          leaseLost = true;
+          break;
+        }
+
+        const organization = await this.workspaces.findById(organizationId);
         let data = structuredClone(organization.data);
         refreshPromises(data);
         if (
@@ -60,13 +111,13 @@ export class ReminderWorker implements OnModuleInit, OnModuleDestroy {
           hour >= data.settings.reminderHour &&
           hour <= COLLECTIONS.latestReminderHour
         ) {
+          const scheduledToday = new Set(
+            data.jobs
+              .filter((job) => today(new Date(job.scheduledAt)) === today())
+              .map((job) => job.customerId),
+          );
           for (const customer of data.customers) {
-            if (
-              data.jobs.some(
-                (job) =>
-                  job.customerId === customer.id && today(new Date(job.scheduledAt)) === today(),
-              )
-            ) {
+            if (scheduledToday.has(customer.id)) {
               continue;
             }
             try {
@@ -76,6 +127,7 @@ export class ReminderWorker implements OnModuleInit, OnModuleDestroy {
                 'Collection scheduler',
                 Role.Admin,
               );
+              scheduledToday.add(customer.id);
             } catch {
               /* Ineligible accounts and rate limits are expected. */
             }
@@ -95,7 +147,7 @@ export class ReminderWorker implements OnModuleInit, OnModuleDestroy {
             entityId: job.id,
           });
         }
-        if (JSON.stringify(data) !== JSON.stringify(organization.data)) {
+        if (!leaseLost && JSON.stringify(data) !== JSON.stringify(organization.data)) {
           try {
             await this.workspaces.save(organization, data);
           } catch (error) {
@@ -105,8 +157,29 @@ export class ReminderWorker implements OnModuleInit, OnModuleDestroy {
           }
         }
       }
+    } catch (error) {
+      runError = error instanceof Error ? error.message : 'Worker failed.';
+      throw error;
     } finally {
-      this.running = false;
+      if (leaseLost && !runError) {
+        runError = 'Reminder worker lease was lost.';
+      }
+      try {
+        if (heartbeat) {
+          clearInterval(heartbeat);
+        }
+        if (leaseAcquired) {
+          await this.workspaces.releaseWorkerLease(REMINDER_WORKER_LEASE, ownerToken);
+        }
+      } finally {
+        try {
+          if (leaseAcquired) {
+            await this.monitoring.workerFinished(REMINDER_WORKER_LEASE, runError);
+          }
+        } finally {
+          this.running = false;
+        }
+      }
     }
   }
 }

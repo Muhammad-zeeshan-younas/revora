@@ -1,6 +1,11 @@
 import { CollectionPriority, InvoiceStatus, PaymentStatus, PromiseStatus } from './enums';
 import type { Customer, Invoice, Payment, PromiseToPay, Workspace } from './schema';
-import type { AccountSummary, AgingBucket, ReceivablesMetrics } from './finance.types';
+import type {
+  AccountSummary,
+  AgingBucket,
+  OperationsMetrics,
+  ReceivablesMetrics,
+} from './finance.types';
 import { FINANCE } from './constants';
 import { groupBy } from './collections';
 
@@ -11,16 +16,20 @@ const dateFormatter = new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 });
 const moneyFormatter = new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2 });
+const POSITIVE_RUPEE_AMOUNT_PATTERN = /^\d+(\.\d{1,2})?$/;
+const CUSTOMER_NAME_WORD_SEPARATOR_PATTERN = /\s+/;
 
 export function today(now = new Date()): string {
   return dateFormatter.format(now);
 }
+
 export function offsetDate(date: string, days: number): string {
   return new Date(Date.parse(`${date}T00:00:00Z`) + days * FINANCE.millisecondsPerDay)
     .toISOString()
     .slice(0, 10);
 }
-export function overdueDays(invoice: Invoice, date = today()): number {
+
+export function overdueDays(invoice: Pick<Invoice, 'dueAt'>, date = today()): number {
   return Math.max(
     0,
     Math.floor(
@@ -29,11 +38,13 @@ export function overdueDays(invoice: Invoice, date = today()): number {
     ),
   );
 }
+
 export function balance(invoice: Invoice): number {
   return invoice.status === InvoiceStatus.Draft || invoice.status === InvoiceStatus.WrittenOff
     ? 0
     : invoice.amount - invoice.paid;
 }
+
 export function invoiceStatus(invoice: Invoice, date = today()): InvoiceStatus {
   if (invoice.status !== InvoiceStatus.Open) {
     return invoice.status;
@@ -47,6 +58,7 @@ export function invoiceStatus(invoice: Invoice, date = today()): InvoiceStatus {
 
   return invoice.paid > 0 ? InvoiceStatus.PartiallyPaid : InvoiceStatus.Open;
 }
+
 export function account(workspace: Workspace, customerId: string, date = today()): AccountSummary {
   return summarizeAccount(
     workspace.customers.find((customer) => customer.id === customerId),
@@ -120,6 +132,7 @@ function summarizeAccount(
     priority,
   };
 }
+
 export function aging(workspace: Workspace, date = today()): AgingBucket[] {
   const buckets = [
     { label: 'Current', amount: 0, color: '#315ee7' },
@@ -141,6 +154,7 @@ export function aging(workspace: Workspace, date = today()): AgingBucket[] {
 
   return buckets;
 }
+
 export function metrics(workspace: Workspace, date = today()): ReceivablesMetrics {
   const total = workspace.invoices.reduce((sum, invoice) => sum + balance(invoice), 0);
   const overdue = workspace.invoices.reduce(
@@ -172,6 +186,44 @@ export function metrics(workspace: Workspace, date = today()): ReceivablesMetric
     averageDays: total > 0 ? Math.round(weightedDays / total) : 0,
   };
 }
+
+export function operationsMetrics(workspace: Workspace, date = today()): OperationsMetrics {
+  const result: OperationsMetrics = {
+    unallocatedReceipts: 0,
+    unallocatedAmount: 0,
+    receiptsWaitingSevenDays: 0,
+    promisesDue: 0,
+    promisesKept: 0,
+  };
+  const oldDate = offsetDate(date, -7);
+  for (const payment of workspace.payments) {
+    if (payment.status === PaymentStatus.Reversed) {
+      continue;
+    }
+    const remaining =
+      payment.amount - payment.allocations.reduce((sum, item) => sum + item.amount, 0);
+    if (remaining <= 0) {
+      continue;
+    }
+    result.unallocatedReceipts++;
+    result.unallocatedAmount += remaining;
+    if (payment.date <= oldDate) {
+      result.receiptsWaitingSevenDays++;
+    }
+  }
+  for (const promise of workspace.promises) {
+    if (promise.status === PromiseStatus.Cancelled || promise.date > date) {
+      continue;
+    }
+    result.promisesDue++;
+    if (promise.status === PromiseStatus.Kept) {
+      result.promisesKept++;
+    }
+  }
+
+  return result;
+}
+
 export function formatMoney(paisa: number, compact = false): string {
   const rupees = paisa / FINANCE.paisaPerRupee;
   if (compact && Math.abs(rupees) >= 1_000_000) {
@@ -183,8 +235,9 @@ export function formatMoney(paisa: number, compact = false): string {
 
   return `Rs ${moneyFormatter.format(rupees)}`;
 }
+
 export function toPaisa(value: string): number {
-  if (!/^\d+(\.\d{1,2})?$/.test(value.trim())) {
+  if (!POSITIVE_RUPEE_AMOUNT_PATTERN.test(value.trim())) {
     throw new Error('Enter a positive amount with at most two decimal places.');
   }
   const [whole = '0', fraction = ''] = value.trim().split('.');
@@ -195,12 +248,14 @@ export function toPaisa(value: string): number {
 
   return result;
 }
+
 export interface MatchSuggestion {
   customer: Customer;
   allocations: { invoiceId: string; amount: number }[];
   confidence: number;
   reason: string;
 }
+
 export function suggestMatch(workspace: Workspace, payment: Payment): MatchSuggestion | null {
   const remaining =
     payment.amount - payment.allocations.reduce((sum, allocation) => sum + allocation.amount, 0);
@@ -224,7 +279,7 @@ export function suggestMatch(workspace: Workspace, payment: Payment): MatchSugge
       );
       const nameMatch = customer.name
         .toLowerCase()
-        .split(/\s+/)
+        .split(CUSTOMER_NAME_WORD_SEPARATOR_PATTERN)
         .filter((word) => word.length > 3)
         .some((word) => reference.includes(word));
       const knownCustomer = customer.id === payment.customerId;

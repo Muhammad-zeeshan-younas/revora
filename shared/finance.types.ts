@@ -18,6 +18,14 @@ export interface ReceivablesMetrics {
   averageDays: number;
 }
 
+export interface OperationsMetrics {
+  unallocatedReceipts: number;
+  unallocatedAmount: number;
+  receiptsWaitingSevenDays: number;
+  promisesDue: number;
+  promisesKept: number;
+}
+
 export interface AgingBucket {
   label: string;
   amount: number;

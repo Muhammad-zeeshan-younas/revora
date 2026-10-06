@@ -1,4 +1,10 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 import { SESSION } from '../../shared/constants';
 import { AuditEvent, Role } from '../../shared/enums';
@@ -12,12 +18,14 @@ import type {
   InvitationResultDto,
 } from '../dto/auth.dto';
 import { hashPassword, hashToken } from '../utils/password';
+import { EmailService } from './email.service';
 
 @Injectable()
 export class InvitationsService {
   constructor(
     @Inject(AuthRepository) private readonly accounts: AuthRepository,
     @Inject(WorkspaceRepository) private readonly workspaces: WorkspaceRepository,
+    @Inject(EmailService) private readonly email: EmailService,
   ) {}
 
   async create(session: Session, input: CreateInvitationDto): Promise<InvitationResultDto> {
@@ -46,8 +54,20 @@ export class InvitationsService {
       organization,
     );
 
+    const link = `${process.env['APP_ORIGIN'] ?? 'http://127.0.0.1:5173'}/?invite=${token}`;
+    if (this.email.configured()) {
+      try {
+        await this.email.sendInvitation(input.email, link, hashToken(token));
+      } catch (error) {
+        Logger.error(
+          error instanceof Error ? error.message : 'Invitation email failed.',
+          'AccountEmail',
+        );
+      }
+    }
+
     return {
-      link: `${process.env['APP_ORIGIN'] ?? 'http://127.0.0.1:5173'}/?invite=${token}`,
+      link,
       expiresAt,
     };
   }

@@ -1,42 +1,101 @@
 <script setup lang="ts">
-  import { PageId, ActionKind } from '../config/ui.enums';
-
+  import { computed, onMounted, ref, watch } from 'vue';
+  import { FINANCE } from '../../shared/constants';
   import { InvoiceStatus, PaymentStatus, PromiseStatus } from '../../shared/enums';
-
-  import { computed, ref } from 'vue';
+  import { overviewProjectionSchema } from '../../shared/overview-projection';
+  import type { OverviewProjection } from '../../shared/overview-projection';
+  import {
+    aging,
+    balance,
+    customerAccounts,
+    formatMoney,
+    metrics,
+    operationsMetrics,
+    today,
+  } from '../../shared/finance';
   import type { Workspace } from '../../shared/schema';
-  import { aging, balance, formatMoney, metrics, today } from '../../shared/finance';
-  import { useCustomerAccounts } from '../composables/useCustomerAccounts';
-  import type { Action, Page } from '../types';
-  import Icon from '../components/ui/UiIcon.vue';
   import Badge from '../components/ui/UiBadge.vue';
   import EmptyState from '../components/ui/EmptyState.vue';
+  import Icon from '../components/ui/UiIcon.vue';
+  import { request } from '../lib/http-client';
+  import { snapshot } from '../stores/workspace';
+  import { ActionKind, PageId } from '../config/ui.enums';
+  import type { Action, Page } from '../types';
+
+  enum OverviewPeriod {
+    SixMonths = '6',
+    ThreeMonths = '3',
+  }
+
+  const TOP_CUSTOMER_LIMIT = 5;
+  const MILLISECONDS_PER_MINUTE = 60_000;
+  const MINUTES_PER_HOUR = 60;
+  const MINUTES_PER_DAY = FINANCE.millisecondsPerDay / MILLISECONDS_PER_MINUTE;
+  const CHART_LAYOUT = {
+    width: 580,
+    height: 225,
+    left: 20,
+    right: 560,
+    baseline: 185,
+    plotHeight: 155,
+    gridLeft: 10,
+    gridRight: 570,
+    gridLines: [30, 107, 185],
+    minimumScalePaisa: 100_000_000,
+    scaleHeadroom: 1.15,
+  } as const;
 
   const props = defineProps<{ workspace: Workspace }>();
   const emit = defineEmits<{ navigate: [page: Page]; action: [action: Action] }>();
-  const period = ref('6');
+  const period = ref<OverviewPeriod>(OverviewPeriod.SixMonths);
   const hovered = ref<number | null>(null);
-  const numbers = computed(() => metrics(props.workspace));
-  const { accounts } = useCustomerAccounts(() => props.workspace);
+  const projection = ref<OverviewProjection | null>(null);
+  const projectionError = ref('');
+  const numbers = computed(() => projection.value?.numbers ?? metrics(props.workspace));
+  const operations = computed(
+    () => projection.value?.operations ?? operationsMetrics(props.workspace),
+  );
+  const customerCount = computed(
+    () => projection.value?.customerCount ?? props.workspace.customers.length,
+  );
   const openInvoiceCount = computed(
-    () => props.workspace.invoices.filter((invoice) => balance(invoice) > 0).length,
+    () =>
+      projection.value?.openInvoiceCount ??
+      props.workspace.invoices.filter((invoice) => balance(invoice) > 0).length,
   );
-  const buckets = computed(() => aging(props.workspace));
-  const topCustomers = computed(() =>
-    accounts.value
-      .filter((customer) => customer.overdue > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5),
+  const buckets = computed(() => projection.value?.buckets ?? aging(props.workspace));
+  const topCustomers = computed(
+    () =>
+      projection.value?.topCustomers ??
+      customerAccounts(props.workspace)
+        .filter((customer) => customer.overdue > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, TOP_CUSTOMER_LIMIT),
   );
-  const unmatched = computed(() =>
-    props.workspace.payments.filter((payment) =>
-      [PaymentStatus.Unmatched, PaymentStatus.Partial].includes(payment.status),
-    ),
+  const unmatchedCount = computed(
+    () =>
+      projection.value?.unmatchedCount ??
+      props.workspace.payments.filter((payment) =>
+        [PaymentStatus.Unmatched, PaymentStatus.Partial].includes(payment.status),
+      ).length,
   );
-  const pendingPromises = computed(() =>
-    props.workspace.promises.filter((promise) => promise.status === PromiseStatus.Pending),
+  const pendingPromiseCount = computed(
+    () =>
+      projection.value?.pendingPromiseCount ??
+      props.workspace.promises.filter((promise) => promise.status === PromiseStatus.Pending).length,
+  );
+  const pendingPromiseAmount = computed(
+    () =>
+      projection.value?.pendingPromiseAmount ??
+      props.workspace.promises
+        .filter((promise) => promise.status === PromiseStatus.Pending)
+        .reduce((sum, promise) => sum + promise.amount, 0),
+  );
+  const recentAudit = computed(
+    () => projection.value?.recentAudit ?? props.workspace.audit.slice(0, 4),
   );
   const chart = computed(() => {
+    if (projection.value) {return projection.value.chart.slice(-Number(period.value));}
     const result: { label: string; collected: number; invoiced: number }[] = [];
     for (let index = Number(period.value) - 1; index >= 0; index--) {
       const date = new Date(`${today().slice(0, 7)}-01T00:00:00Z`);
@@ -66,14 +125,29 @@
 
     return result;
   });
+
+  async function loadOverview(): Promise<void> {
+    projectionError.value = '';
+    try {
+      projection.value = await request('/workspace/overview', overviewProjectionSchema);
+    } catch (cause) {
+      projectionError.value = cause instanceof Error ? cause.message : 'Could not load overview.';
+    }
+  }
+
+  watch(
+    () => snapshot.value?.revision,
+    () => void loadOverview(),
+  );
+  onMounted(() => void loadOverview());
   const chartMax = computed(
     () =>
-      Math.max(100000000, ...chart.value.map((item) => Math.max(item.collected, item.invoiced))) *
-      1.15,
+      Math.max(
+        CHART_LAYOUT.minimumScalePaisa,
+        ...chart.value.map((item) => Math.max(item.collected, item.invoiced)),
+      ) * CHART_LAYOUT.scaleHeadroom,
   );
   const chartTotal = computed(() => chart.value.reduce((sum, item) => sum + item.collected, 0));
-  const y = (value: number): number => 185 - (value / chartMax.value) * 155;
-  const x = (index: number): number => 20 + (index * 540) / Math.max(1, chart.value.length - 1);
   const collectedPoints = computed(() =>
     chart.value.map((item, index) => `${x(index)},${y(item.collected)}`).join(' '),
   );
@@ -81,7 +155,8 @@
     chart.value.map((item, index) => `${x(index)},${y(item.invoiced)}`).join(' '),
   );
   const areaPath = computed(
-    () => `M 20,185 L ${collectedPoints.value.replaceAll(' ', ' L ')} L 560,185 Z`,
+    () =>
+      `M ${CHART_LAYOUT.left},${CHART_LAYOUT.baseline} L ${collectedPoints.value.replaceAll(' ', ' L ')} L ${CHART_LAYOUT.right},${CHART_LAYOUT.baseline} Z`,
   );
   const donut = computed(() => {
     let cumulative = 0;
@@ -96,17 +171,41 @@
       .join(',');
   });
 
-  function relativeTime(date: string): string {
-    const minutes = Math.max(1, Math.round((Date.now() - Date.parse(date)) / 60000));
+  function y(value: number): number {
+    return CHART_LAYOUT.baseline - (value / chartMax.value) * CHART_LAYOUT.plotHeight;
+  }
 
-    return minutes < 60
-      ? `${minutes}m ago`
-      : minutes < 1440
-        ? `${Math.floor(minutes / 60)}h ago`
-        : `${Math.floor(minutes / 1440)}d ago`;
+  function x(index: number): number {
+    const plotWidth = CHART_LAYOUT.right - CHART_LAYOUT.left;
+
+    return CHART_LAYOUT.left + (index * plotWidth) / Math.max(1, chart.value.length - 1);
+  }
+
+  function relativeTime(date: string): string {
+    const minutes = Math.max(
+      1,
+      Math.round((Date.now() - Date.parse(date)) / MILLISECONDS_PER_MINUTE),
+    );
+
+    if (minutes < MINUTES_PER_HOUR) {
+      return `${minutes}m ago`;
+    }
+
+    if (minutes < MINUTES_PER_DAY) {
+      return `${Math.floor(minutes / MINUTES_PER_HOUR)}h ago`;
+    }
+
+    return `${Math.floor(minutes / MINUTES_PER_DAY)}d ago`;
   }
 </script>
 <template>
+  <p
+    v-if="projectionError"
+    role="alert"
+    class="error-banner"
+  >
+    {{ projectionError }}
+  </p>
   <div class="overview-toolbar">
     <div class="segmented">
       <button class="selected">Business overview</button>
@@ -148,7 +247,7 @@
           {{ openInvoiceCount }}
           open invoices
         </span>
-        <span>Across {{ workspace.customers.length }} customers</span>
+        <span>Across {{ customerCount }} customers</span>
       </div>
       <div class="card-watermark"></div>
     </article>
@@ -217,6 +316,26 @@
       </div>
     </article>
   </section>
+  <section
+    class="operations-strip"
+    aria-label="Collection operations"
+  >
+    <button @click="emit('navigate', PageId.Payments)">
+      <span>Receipts to match</span>
+      <strong>{{ operations.unallocatedReceipts }}</strong>
+      <small>{{ formatMoney(operations.unallocatedAmount) }} still unallocated</small>
+    </button>
+    <button @click="emit('navigate', PageId.Payments)">
+      <span>Waiting 7+ days</span>
+      <strong>{{ operations.receiptsWaitingSevenDays }}</strong>
+      <small>Receipts with an unallocated balance</small>
+    </button>
+    <button @click="emit('navigate', PageId.Collections)">
+      <span>Promises kept by due date</span>
+      <strong>{{ operations.promisesKept }} / {{ operations.promisesDue }}</strong>
+      <small>Due promises, excluding cancellations</small>
+    </button>
+  </section>
   <section class="insight-strip">
     <span class="insight-icon">
       <Icon
@@ -228,7 +347,7 @@
     <div>
       <strong>A little attention can go a long way.</strong>
       <p>
-        {{ unmatched.length }} incoming payments are ready for review. Match them to keep your
+        {{ unmatchedCount }} incoming payments are ready for review. Match them to keep your
         balances up to date.
       </p>
     </div>
@@ -255,8 +374,8 @@
           aria-label="Chart period"
           class="compact-select"
         >
-          <option value="6">Last 6 months</option>
-          <option value="3">Last 3 months</option>
+          <option :value="OverviewPeriod.SixMonths">Last 6 months</option>
+          <option :value="OverviewPeriod.ThreeMonths">Last 3 months</option>
         </select>
       </header>
       <div class="chart-summary">
@@ -283,7 +402,7 @@
           </span>
         </div>
         <svg
-          viewBox="0 0 580 225"
+          :viewBox="`0 0 ${CHART_LAYOUT.width} ${CHART_LAYOUT.height}`"
           role="img"
           :aria-label="`Collections and invoiced amounts over the last ${period} months`"
         >
@@ -308,10 +427,10 @@
             </linearGradient>
           </defs>
           <line
-            v-for="line in [30, 107, 185]"
+            v-for="line in CHART_LAYOUT.gridLines"
             :key="line"
-            x1="10"
-            x2="570"
+            :x1="CHART_LAYOUT.gridLeft"
+            :x2="CHART_LAYOUT.gridRight"
             :y1="line"
             :y2="line"
             stroke="#dce3ee"
@@ -539,7 +658,7 @@
       </header>
       <div class="activity-list">
         <div
-          v-for="(event, index) in workspace.audit.slice(0, 4)"
+          v-for="(event, index) in recentAudit"
           :key="event.id"
           class="activity-item"
         >
@@ -567,7 +686,7 @@
           </div>
         </div>
         <EmptyState
-          v-if="!workspace.audit.length"
+          v-if="!recentAudit.length"
           title="A fresh start"
           text="Your first action will appear here."
         />
@@ -594,17 +713,12 @@
       </span>
       <span>
         <strong>Good on their word.</strong>
-        <small>{{ pendingPromises.length }} payment promises are on the horizon.</small>
+        <small>{{ pendingPromiseCount }} payment promises are on the horizon.</small>
       </span>
     </div>
     <div>
       <strong>
-        {{
-          formatMoney(
-            pendingPromises.reduce((sum, promise) => sum + promise.amount, 0),
-            true,
-          )
-        }}
+        {{ formatMoney(pendingPromiseAmount, true) }}
       </strong>
       <span>expected from active promises</span>
     </div>

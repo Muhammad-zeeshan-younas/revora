@@ -12,6 +12,7 @@ import { sessionSchema } from '../../shared/schema';
 import type { Session } from '../../shared/schema';
 import type { WorkspaceRecord } from '../interfaces/workspace-record.interface';
 import { saveWorkspaceToDatabase } from './workspace-database.mapper';
+import { PasswordResetEntity } from '../models/password-reset.model';
 
 @Injectable()
 export class AuthRepository {
@@ -21,6 +22,37 @@ export class AuthRepository {
     return this.database.transaction((manager) =>
       manager.getRepository(UserEntity).findOneBy({ email }),
     );
+  }
+
+  async savePasswordReset(id: string, userId: string, expiresAt: string): Promise<void> {
+    await this.database.transaction(async (manager) => {
+      await manager.getRepository(PasswordResetEntity).delete({ userId });
+      await manager.getRepository(PasswordResetEntity).insert({ id, userId, expiresAt });
+    });
+  }
+
+  async deletePasswordReset(id: string): Promise<void> {
+    await this.database.transaction(async (manager) => {
+      await manager.getRepository(PasswordResetEntity).delete({ id });
+    });
+  }
+
+  async consumePasswordReset(id: string, passwordHash: string, now: string): Promise<boolean> {
+    return this.database.transaction(async (manager) => {
+      const reset = await manager.getRepository(PasswordResetEntity).findOneBy({ id });
+      if (!reset || reset.expiresAt <= now) {
+        return false;
+      }
+      const consumed = await manager.getRepository(PasswordResetEntity).delete({ id });
+      if (consumed.affected !== 1) {
+        return false;
+      }
+      await manager.getRepository(UserEntity).update({ id: reset.userId }, { passwordHash });
+      await manager.getRepository(SessionEntity).delete({ userId: reset.userId });
+      await manager.getRepository(PasswordResetEntity).delete({ userId: reset.userId });
+
+      return true;
+    });
   }
 
   async createAccount(organization: WorkspaceRecord, user: UserRecord): Promise<void> {

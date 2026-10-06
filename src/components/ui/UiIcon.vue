@@ -47,6 +47,7 @@
     PhChatCircleText,
     PhLink,
     PhPause,
+    PhPackage,
   } from '@phosphor-icons/vue';
 
   const icons = {
@@ -97,6 +98,7 @@
     chat: PhChatCircleText,
     link: PhLink,
     pause: PhPause,
+    package: PhPackage,
   };
   export type IconName = keyof typeof icons;
   withDefaults(

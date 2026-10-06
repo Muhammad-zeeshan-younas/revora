@@ -1,7 +1,9 @@
 <script setup lang="ts">
   import type { ActionForm } from './action-form.types';
+  import { CustomerStatus } from '../../../shared/enums';
 
   const form = defineModel<ActionForm>({ required: true });
+  defineProps<{ editing?: boolean }>();
 </script>
 
 <template>
@@ -49,7 +51,7 @@
         placeholder="+923001234567"
       />
     </label>
-    <label>
+    <label v-if="!editing">
       Credit limit (PKR)
       <input
         v-model="form.creditLimit"
@@ -82,6 +84,13 @@
         v-model="form.salesperson"
         required
       />
+    </label>
+    <label v-if="editing">
+      Account status
+      <select v-model="form.status">
+        <option :value="CustomerStatus.Active">Active</option>
+        <option :value="CustomerStatus.OnHold">On hold</option>
+      </select>
     </label>
   </div>
 </template>

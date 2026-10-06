@@ -80,7 +80,7 @@ Click a customer to open its profile. The profile contains outstanding, overdue,
 
 **Scenario:** a distributor owes Rs 180,000 against a Rs 250,000 limit. Its profile shows Rs 70,000 available. A phone call can be recorded in Interactions without changing the balance.
 
-**Edge cases:** duplicate customer names are rejected case-insensitively, including duplicates within an import batch. An invalid row aborts the entire batch. An on-hold account can still appear in overdue and credit views. The current application does not provide a general customer-edit or delete workflow; do not assume all recorded fields can be edited after creation.
+**Edge cases:** duplicate customer names are rejected case-insensitively, including duplicates within an import batch. An invalid row aborts the entire batch. An on-hold account can still appear in overdue and credit views. The profile can edit customer details and account status; credit limits use their own action, and customer deletion is unavailable.
 
 ## Invoices
 
@@ -88,18 +88,18 @@ Click a customer to open its profile. The profile contains outstanding, overdue,
 
 The table shows the invoice reference, customer, due date, original amount, remaining balance, status, and available actions. Issue dates are captured when creating/importing invoices and included in the overview report. Search matches invoice number or customer name. Rows sort by earliest due date.
 
-| Status              | Meaning                                                                                                                                  |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Open                | Outstanding, current, and no payment has been allocated.                                                                                 |
-| Partially paid      | Some payment has been allocated, with a current balance remaining.                                                                       |
-| Overdue             | A balance remains after the due date. This label takes precedence over partially paid.                                                   |
-| Paid                | Allocations cover the full invoice amount.                                                                                               |
-| Disputed            | The invoice is flagged for review. Its balance remains in exposure; it cannot receive allocations until the dispute is cleared.          |
-| Draft / Written off | Supported stored states with zero contribution to receivables. The current UI does not offer a full draft/publish or write-off workflow. |
+| Status              | Meaning                                                                                                                         |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Open                | Outstanding, current, and no payment has been allocated.                                                                        |
+| Partially paid      | Some payment has been allocated, with a current balance remaining.                                                              |
+| Overdue             | A balance remains after the due date. This label takes precedence over partially paid.                                          |
+| Paid                | Allocations cover the full invoice amount.                                                                                      |
+| Disputed            | The invoice is flagged for review. Its balance remains in exposure; it cannot receive allocations until the dispute is cleared. |
+| Draft / Written off | Both contribute zero to receivables. Draft publishing is unavailable; a write-off requires a different owner/admin reviewer.    |
 
 The filters are All, Open, Overdue, Paid, and Disputed. Current partially paid invoices appear under All; the Open filter is an exact displayed-status filter.
 
-**Actions:** create an invoice, import CSV, export matching invoices, inspect the customer, and flag or clear a dispute with a reason. Payment allocation happens in Payments.
+**Actions:** create an invoice, import CSV, export matching invoices, inspect the customer, flag or clear a dispute, record internal corrections or credit notes, and request/review a write-off. Payment allocation happens in Payments. Tax credit notes remain in the billing system.
 
 **Scenario:** an invoice for Rs 50,000 receives Rs 15,000. Its balance is Rs 35,000. Before its due date it is partially paid; after that date it becomes overdue while retaining the same balance.
 
@@ -148,9 +148,11 @@ The table displays customer, original promised amount, promised date, status, an
 
 ### Reminder outbox
 
-Queued means a local job exists. Prepared means the backend has prepared it for inspection. Cancelled means the job was cancelled. **None of these statuses means sent, delivered, or read. WhatsApp delivery is not connected.**
+Queued means a local job exists. Prepared means the backend has prepared it. Cancelled means the job was cancelled. A configured Meta account can send eligible, consented prepared jobs using an approved template. The outbox shows separate sending, accepted, sent, delivered, read, failed, and unknown delivery states. Unknown outcomes are held for review; confirmed failed sends can be retried. Without configuration, no WhatsApp message is sent.
 
 Each entry includes the customer, message, scheduling information, and status. Copy text for review or cancel the job.
+
+The Field drafts tab saves interaction and promise drafts in this browser for later sync. Sales staff can opt into a passphrase-encrypted account view in Settings, then unlock that saved view after a disconnected reload. Sync drafts and refresh account figures after reconnecting. Customer replies captured by the signed WhatsApp webhook appear in the profile's interaction history.
 
 **Edge cases:** no overdue balance, an on-hold customer, a duplicate non-cancelled job for the same Karachi day, or the daily limit blocks queuing. The reminder amount is the full outstanding balance, not only overdue invoices; the invoice placeholder selects the earliest-due outstanding invoice. Disputed balances remain included, so review the text before using it.
 
@@ -169,7 +171,7 @@ Rows show date/reference, customer or unidentified status, bank/method details, 
 | Matched   | The entire receipt is allocated. Individual invoices may still be partly paid.                  |
 | Reversed  | Its allocations were undone. The record is retained and cannot be allocated again.              |
 
-**Actions:** record a payment, import a bank CSV, review a suggested match, choose manual allocations, reverse an allocated payment with a reason, or export the filtered list.
+**Actions:** record a payment, import a bank CSV, review a suggested match, choose manual allocations, reverse an allocated payment with a reason, review a statement reconciliation, or export the filtered list. Statement reconciliation compares credits with recorded receipts and checks balance arithmetic; it is not a full accounting general-ledger reconciliation.
 
 Suggested matches use a known customer, invoice-reference text, customer-name words, and exact invoice amount. Otherwise they allocate oldest open invoices first. The confidence percentage is a rule score, capped at 98; it is not a statistical accuracy guarantee. Similar names or references require extra review. No suggestion means use manual selection; it does not mean the receipt is invalid.
 
@@ -180,7 +182,7 @@ Suggested matches use a known customer, invoice-reference text, customer-name wo
 - One receipt cannot be split across different customers. A receipt already assigned to one customer cannot be allocated to another.
 - Each submitted allocation must be positive, fit the invoice balance, and fit the remaining receipt amount. Duplicate invoice IDs in one submission are rejected.
 - Draft, written-off, disputed, or another customer's invoices cannot receive allocations. An overdue invoice with an underlying open state can.
-- Import rejects duplicate bank/reference combinations, comparing reference case-insensitively. Future payment dates are rejected. Debit rows are skipped by the bank CSV importer; it is an incoming-payment workflow.
+- Import rejects duplicate bank/reference combinations, comparing reference case-insensitively. Future payment dates are rejected. Debit rows are skipped by the bank CSV importer; it is an incoming-payment workflow. The import dialog can map bank-specific columns and select `DD/MM/YYYY` when needed.
 - Reversal restores affected invoice balances and recalculates promise status. It retains allocations as historical evidence, excludes them from collections, and does not issue a bank refund.
 - Unmatched receipts with no allocations cannot use the reversal action. There is no general delete/edit receipt workflow in this pilot.
 - The current table exposes Reverse only for Matched receipts. Although the backend supports reversing an allocated partial receipt, the UI does not yet expose that path.
@@ -203,7 +205,7 @@ Filters are All, Over limit, and Overdue. Search and sorting follow the Customer
 
 **Actions:** inspect the customer, check a proposed order amount, and save a new approved limit with a reason. Only an owner/admin can change limits. The decision is recorded in Activity.
 
-**Edge cases:** a limit can be reduced below existing exposure; this does not reduce the debt. Disputed balances remain in exposure. A balance equal to its limit has zero availability but is not “over limit.” Invoice creation currently does not enforce credit limits; the warning is a human review aid, not an automatic order block.
+**Edge cases:** a limit can be reduced below existing exposure; this does not reduce the debt. Disputed balances remain in exposure. A balance equal to its limit has zero availability but is not “over limit.” The separate Orders & stock page rejects a reservation when stock or customer credit is insufficient. Direct invoice creation also checks existing order holds.
 
 ## Activity center
 
@@ -221,31 +223,33 @@ Search matches actor or detail. Category filters match action prefixes such as p
 
 **Purpose:** inspect workspace identity, manage access, and configure local reminder preparation.
 
-| Section           | What it displays or changes                                                                                                            |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Workspace details | Organization name, PKR currency, Asia/Karachi timezone, and your role. These are informational here.                                   |
-| Your team         | Members and roles. The owner can change non-owner roles; ownership cannot be reassigned here.                                          |
-| Invite member     | Creates a private single-use link that expires after 48 hours. Share it separately; no invitation email is sent.                       |
-| Integrations      | WhatsApp not connected, bank/accounting CSV available, reply assistant running local rules.                                            |
-| Collection rules  | Automatic scheduling switch, preparation hour (08:00–18:00 Karachi), daily limit (1–100), and reminder template (20–1,500 characters). |
+| Section           | What it displays or changes                                                                                                                 |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace details | Organization name, PKR currency, Asia/Karachi timezone, and your role. These are informational here.                                        |
+| Your team         | Members and roles. The owner can change non-owner roles; ownership cannot be reassigned here.                                               |
+| Invite member     | Creates a private single-use link that expires after 48 hours. Share it separately; no invitation email is sent.                            |
+| Integrations      | Optional Meta WhatsApp integration requires a pilot account and approved template; bank/accounting CSV and local reply rules are available. |
+| Sales territories | Owners/admins assign customers to Sales accounts. Sales members see and write field records only for assigned customers.                    |
+| Collection rules  | Automatic scheduling switch, preparation hour (08:00–18:00 Karachi), daily limit (1–100), and reminder template (20–1,500 characters).      |
 
 The scheduler checks approximately every 30 seconds while the backend is running. Automatic queuing occurs from the configured hour through the 18:00 hour. Existing queued jobs are prepared on a tick even if automatic scheduling is disabled.
 
 Use exact template placeholders `{{customer}}`, `{{invoice}}`, and `{{amount}}`, without internal spaces. Unsupported placeholders remain literal. The amount is a numeric rupee value; include your own `Rs`/`PKR` prefix in the template.
 
-**Scenario:** set preparation to 10:00 and a daily limit of 20. With the backend running, eligible accounts are queued from 10:00 Karachi, subject to hold status, overdue balances, and same-day duplication rules. Inspect them in the outbox; no message is delivered automatically.
+**Scenario:** set preparation to 10:00 and a daily limit of 20. With the backend running, eligible accounts are queued from 10:00 Karachi, subject to hold status, overdue balances, and same-day duplication rules. Without a configured Meta account and recorded consent, they stay in the local outbox.
 
 **Edge cases:** closing the frontend does not stop a running backend scheduler. Stopping the backend stops preparation. Lowering the limit does not remove existing jobs. Template changes affect newly queued text, not existing jobs. The scheduler iterates customer records; it does not use the Collection queue's priority sorting when a daily cap is reached.
 
 ## Permissions
 
-| Role           | Current access                                                                                                     |
-| -------------- | ------------------------------------------------------------------------------------------------------------------ |
-| Owner          | Financial and collection actions, credit/settings changes, invitations, and changes to non-owner roles.            |
-| Admin          | Financial and collection actions, credit/settings changes, and invitations. Cannot change team roles or ownership. |
-| Accountant     | Customer/invoice/payment actions and collection actions. Cannot change credit limits, settings, or roles.          |
-| Collections    | Record interactions and promises, cancel promises, queue/cancel reminders.                                         |
-| Sales / Viewer | Read-only workspace access.                                                                                        |
+| Role        | Current access                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------------ |
+| Owner       | Financial and collection actions, credit/settings changes, invitations, and changes to non-owner roles.            |
+| Admin       | Financial and collection actions, credit/settings changes, and invitations. Cannot change team roles or ownership. |
+| Accountant  | Customer/invoice/payment actions and collection actions. Cannot change credit limits, settings, or roles.          |
+| Collections | Record interactions and promises, cancel promises, queue/cancel reminders.                                         |
+| Sales       | Reads assigned customers and their related records; can log interactions and promises for those customers.         |
+| Viewer      | Read-only workspace access.                                                                                        |
 
 The backend enforces permissions. Some controls remain visible to read-only roles; an attempted mutation returns an error instead of saving. Visibility alone does not imply permission. All roles operate within their own organization.
 

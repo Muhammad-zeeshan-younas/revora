@@ -4,6 +4,7 @@ import type {
   MessageDirection,
   PaymentMethod,
   Role,
+  CustomerStatus,
 } from '../../../shared/enums';
 
 /** Editable form values stay in rupees until the validated command boundary. */
@@ -17,6 +18,7 @@ export interface ActionForm {
   salesperson: string;
   creditLimit: string;
   terms: number;
+  status: CustomerStatus;
   customerId: string;
   number: string;
   issuedAt: string;

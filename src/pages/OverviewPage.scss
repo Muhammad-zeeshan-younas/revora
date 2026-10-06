@@ -54,6 +54,43 @@
   margin-bottom: 24px;
 }
 
+.operations-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+  button {
+    text-align: left;
+    background: $surface-soft;
+    color: $ink;
+    border: 1px solid $border;
+    border-radius: 10px;
+    padding: 14px 17px;
+    display: grid;
+    gap: 4px;
+    &:hover {
+      border-color: $accent-light;
+    }
+  }
+  span {
+    color: $muted;
+    font-size: 12px;
+  }
+  strong {
+    font-size: 21px;
+  }
+  small {
+    color: $muted;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 760px) {
+  .operations-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
 .stat-card {
   min-height: 166px;
   border: 1px solid $border;

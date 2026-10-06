@@ -4,6 +4,10 @@ import {
   CustomerStatus,
   InteractionOutcome,
   InvoiceStatus,
+  InvoiceCorrectionKind,
+  InvoiceAdjustmentDirection,
+  WriteOffStatus,
+  BankReconciliationIssueKind,
   MessageDirection,
   PaymentMethod,
   PaymentStatus,
@@ -13,6 +17,9 @@ import {
 } from './enums';
 import { z } from 'zod';
 import { FINANCE, COLLECTIONS, SESSION } from './constants';
+
+const INTERNATIONAL_PHONE_NUMBER_PATTERN = /^\+\d{10,15}$/;
+const AUTHENTICATOR_CODE_PATTERN = /^\d{6}$/;
 
 export const moneySchema = z.number().int().min(0).max(FINANCE.maximumAmount);
 const positiveMoney = moneySchema.refine((value) => value > 0, 'Amount must be greater than zero');
@@ -26,7 +33,7 @@ export const customerSchema = z.object({
   name,
   contact: name,
   email: z.email(),
-  phone: z.string().regex(/^\+\d{10,15}$/),
+  phone: z.string().regex(INTERNATIONAL_PHONE_NUMBER_PATTERN),
   city: name,
   taxId: z.string().max(80),
   salesperson: name,
@@ -52,6 +59,72 @@ export const invoiceSchema = z.object({
   reference: z.string().max(100),
 });
 export type Invoice = z.infer<typeof invoiceSchema>;
+export const invoiceCorrectionSchema = z.object({
+  id,
+  invoiceId: id,
+  kind: z.enum(InvoiceCorrectionKind),
+  direction: z.enum(InvoiceAdjustmentDirection),
+  amount: positiveMoney,
+  number: z.string().max(100),
+  reason: z.string().min(5).max(500),
+  createdAt: z.iso.datetime(),
+  createdBy: name,
+});
+export type InvoiceCorrection = z.infer<typeof invoiceCorrectionSchema>;
+
+export const writeOffRequestSchema = z.object({
+  id,
+  invoiceId: id,
+  amount: positiveMoney,
+  reason: z.string().min(5).max(500),
+  status: z.enum(WriteOffStatus),
+  requestedAt: z.iso.datetime(),
+  requestedById: id,
+  requestedBy: name,
+  reviewedAt: z.string(),
+  reviewedById: z.string(),
+  reviewedBy: z.string(),
+  reviewReason: z.string(),
+});
+export type WriteOffRequest = z.infer<typeof writeOffRequestSchema>;
+
+export const signedMoneySchema = z
+  .number()
+  .int()
+  .min(-FINANCE.maximumAmount)
+  .max(FINANCE.maximumAmount);
+export const bankStatementEntrySchema = z.object({
+  rowNumber: z.number().int().min(2),
+  date: dateSchema,
+  reference: id,
+  bank: name,
+  credit: moneySchema,
+  debit: moneySchema,
+});
+export type BankStatementEntry = z.infer<typeof bankStatementEntrySchema>;
+
+export const bankReconciliationIssueSchema = z.object({
+  kind: z.enum(BankReconciliationIssueKind),
+  reference: z.string(),
+  detail: z.string(),
+});
+export const bankReconciliationSchema = z.object({
+  id,
+  bank: name,
+  periodStart: dateSchema,
+  periodEnd: dateSchema,
+  openingBalance: signedMoneySchema,
+  closingBalance: signedMoneySchema,
+  creditTotal: moneySchema,
+  debitTotal: moneySchema,
+  balanceDifference: signedMoneySchema,
+  matchedCount: z.number().int().min(0),
+  issues: z.array(bankReconciliationIssueSchema),
+  sourceName: z.string().min(1).max(255),
+  createdAt: z.iso.datetime(),
+  createdBy: name,
+});
+export type BankReconciliation = z.infer<typeof bankReconciliationSchema>;
 export const allocationSchema = z.object({ invoiceId: id, amount: positiveMoney });
 export const paymentSchema = z.object({
   id,
@@ -115,6 +188,9 @@ export const workspaceSchema = z.object({
   }),
   customers: z.array(customerSchema),
   invoices: z.array(invoiceSchema),
+  invoiceCorrections: z.array(invoiceCorrectionSchema).default([]),
+  writeOffRequests: z.array(writeOffRequestSchema).default([]),
+  bankReconciliations: z.array(bankReconciliationSchema).default([]),
   payments: z.array(paymentSchema),
   promises: z.array(promiseSchema),
   interactions: z.array(interactionSchema),
@@ -146,21 +222,28 @@ export const snapshotSchema = z.object({
 });
 export type Snapshot = z.infer<typeof snapshotSchema>;
 
-const customerInput = customerSchema.omit({ id: true });
-const invoiceInput = invoiceSchema
+export const customerInputSchema = customerSchema.omit({ id: true });
+export const invoiceInputSchema = invoiceSchema
   .omit({ id: true, paid: true })
   .refine((value) => value.dueAt >= value.issuedAt, 'Due date must follow invoice date');
-const paymentInput = paymentSchema.omit({ id: true, allocations: true, status: true });
+export const paymentInputSchema = paymentSchema.omit({ id: true, allocations: true, status: true });
 export const commandSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal(CommandType.CreateCustomer), customer: customerInput }),
+  z.object({ type: z.literal(CommandType.CreateCustomer), customer: customerInputSchema }),
+  z.object({
+    type: z.literal(CommandType.UpdateCustomer),
+    customerId: id,
+    customer: customerInputSchema.omit({ creditLimit: true }),
+  }),
   z.object({
     type: z.literal(CommandType.ImportCustomers),
-    customers: z.array(customerInput).min(1).max(COLLECTIONS.maximumBatchRows),
+    customers: z.array(customerInputSchema).min(1).max(COLLECTIONS.maximumBatchRows),
+    sourceName: z.string().trim().min(1).max(255).optional(),
   }),
-  z.object({ type: z.literal(CommandType.CreateInvoice), invoice: invoiceInput }),
+  z.object({ type: z.literal(CommandType.CreateInvoice), invoice: invoiceInputSchema }),
   z.object({
     type: z.literal(CommandType.ImportInvoices),
-    invoices: z.array(invoiceInput).min(1).max(COLLECTIONS.maximumBatchRows),
+    invoices: z.array(invoiceInputSchema).min(1).max(COLLECTIONS.maximumBatchRows),
+    sourceName: z.string().trim().min(1).max(255).optional(),
   }),
   z.object({
     type: z.literal(CommandType.DisputeInvoice),
@@ -168,10 +251,44 @@ export const commandSchema = z.discriminatedUnion('type', [
     disputed: z.boolean(),
     reason: z.string().min(5).max(500),
   }),
-  z.object({ type: z.literal(CommandType.CreatePayment), payment: paymentInput }),
+  z.object({
+    type: z.literal(CommandType.AdjustInvoice),
+    invoiceId: id,
+    direction: z.enum(InvoiceAdjustmentDirection),
+    amount: positiveMoney,
+    reason: z.string().min(5).max(500),
+  }),
+  z.object({
+    type: z.literal(CommandType.IssueCreditNote),
+    invoiceId: id,
+    number: id,
+    amount: positiveMoney,
+    reason: z.string().min(5).max(500),
+  }),
+  z.object({
+    type: z.literal(CommandType.RequestWriteOff),
+    invoiceId: id,
+    reason: z.string().min(5).max(500),
+  }),
+  z.object({
+    type: z.literal(CommandType.ReviewWriteOff),
+    requestId: id,
+    approved: z.boolean(),
+    reason: z.string().min(5).max(500),
+  }),
+  z.object({
+    type: z.literal(CommandType.RecordBankReconciliation),
+    bank: name,
+    openingBalance: signedMoneySchema,
+    closingBalance: signedMoneySchema,
+    sourceName: z.string().trim().min(1).max(255),
+    entries: z.array(bankStatementEntrySchema).min(1).max(COLLECTIONS.maximumBatchRows),
+  }),
+  z.object({ type: z.literal(CommandType.CreatePayment), payment: paymentInputSchema }),
   z.object({
     type: z.literal(CommandType.ImportPayments),
-    payments: z.array(paymentInput).min(1).max(COLLECTIONS.maximumBatchRows),
+    payments: z.array(paymentInputSchema).min(1).max(COLLECTIONS.maximumBatchRows),
+    sourceName: z.string().trim().min(1).max(255).optional(),
   }),
   z.object({
     type: z.literal(CommandType.AllocatePayment),
@@ -213,10 +330,20 @@ export const commandSchema = z.discriminatedUnion('type', [
 export type Command = z.infer<typeof commandSchema>;
 export const mutationSchema = z.object({
   revision: z.number().int().min(0),
+  requestId: z.uuid().optional(),
   command: commandSchema,
 });
 export type Mutation = z.infer<typeof mutationSchema>;
-export const loginSchema = z.object({ email: z.email(), password: z.string().min(1).max(128) });
+export const loginSchema = z.object({
+  email: z.email(),
+  password: z.string().min(1).max(128),
+  code: z.string().regex(AUTHENTICATOR_CODE_PATTERN).optional(),
+});
+export const passwordResetRequestSchema = z.object({ email: z.email() });
+export const passwordResetCompleteSchema = z.object({
+  token: z.string().min(40).max(128),
+  password: z.string().min(SESSION.minimumPasswordLength).max(128),
+});
 export const createCompanySchema = loginSchema.extend({
   password: z.string().min(SESSION.minimumPasswordLength).max(128),
   name,

@@ -2,25 +2,38 @@ import {
   CommandType,
   CustomerStatus,
   InvoiceStatus,
+  InvoiceCorrectionKind,
+  InvoiceAdjustmentDirection,
+  WriteOffStatus,
   PaymentStatus,
   PromiseStatus,
   ReminderStatus,
   Role,
 } from './enums';
 import { account, balance, today } from './finance';
+import { FINANCE } from './constants';
+import { groupBy } from './collections';
+import { paymentReferenceKey } from './payment-reference';
+import { reconcileBankStatement } from './reconciliation';
 import type { Command, Workspace } from './schema';
 
 export function allowed(role: Role, type: Command['type']): boolean {
   if (role === Role.Owner || role === Role.Admin) {
     return true;
   }
-  if (role === Role.Viewer || role === Role.Sales) {
+  if (role === Role.Viewer) {
     return false;
   }
+  if (role === Role.Sales) {
+    return [CommandType.CreateInteraction, CommandType.CreatePromise].includes(type);
+  }
   if (
-    [CommandType.UpdateCredit, CommandType.UpdateSettings, CommandType.UpdateMemberRole].includes(
-      type,
-    )
+    [
+      CommandType.UpdateCredit,
+      CommandType.UpdateSettings,
+      CommandType.UpdateMemberRole,
+      CommandType.ReviewWriteOff,
+    ].includes(type)
   ) {
     return false;
   }
@@ -36,28 +49,34 @@ export function allowed(role: Role, type: Command['type']): boolean {
     CommandType.CancelReminder,
   ].includes(type);
 }
+
 export function refreshPromises(workspace: Workspace, date = today()): void {
+  const paymentsByCustomer = groupBy(
+    workspace.payments.filter((payment) => payment.status !== PaymentStatus.Reversed),
+    (payment) => payment.customerId,
+  );
+  const allocatedByPayment = new Map(
+    workspace.payments.map((payment) => [
+      payment.id,
+      payment.allocations.reduce((sum, allocation) => sum + allocation.amount, 0),
+    ]),
+  );
   for (const promise of workspace.promises) {
     if (promise.status === PromiseStatus.Cancelled) {
       continue;
     }
-    const paid = workspace.payments
+    const baseline = new Map(
+      (promise.baselineAllocations ?? []).map((item) => [item.paymentId, item.amount]),
+    );
+    const paid = (paymentsByCustomer.get(promise.customerId) ?? [])
       .filter(
         (payment) =>
-          payment.customerId === promise.customerId &&
-          payment.status !== PaymentStatus.Reversed &&
-          payment.date >= today(new Date(promise.createdAt)) &&
-          payment.date <= promise.date,
+          payment.date >= today(new Date(promise.createdAt)) && payment.date <= promise.date,
       )
       .reduce(
         (sum, payment) =>
           sum +
-          Math.max(
-            0,
-            payment.allocations.reduce((total, allocation) => total + allocation.amount, 0) -
-              (promise.baselineAllocations?.find((item) => item.paymentId === payment.id)?.amount ??
-                0),
-          ),
+          Math.max(0, (allocatedByPayment.get(payment.id) ?? 0) - (baseline.get(payment.id) ?? 0)),
         0,
       );
     promise.status =
@@ -70,12 +89,14 @@ export function refreshPromises(workspace: Workspace, date = today()): void {
             : PromiseStatus.Pending;
   }
 }
+
 export function applyCommand(
   original: Workspace,
   command: Command,
   actor: string,
   role: Role,
   now = new Date(),
+  actorId = actor,
 ): Workspace {
   if (!allowed(role, command.type)) {
     throw new Error('Your role cannot perform this action.');
@@ -105,7 +126,27 @@ export function applyCommand(
         names.add(name);
         workspace.customers.push({ ...customer, id: crypto.randomUUID() });
       }
-      detail = `${customers.length} customer account${customers.length === 1 ? '' : 's'} added`;
+      detail = `${customers.length} customer account${customers.length === 1 ? '' : 's'} added${command.type === CommandType.ImportCustomers && command.sourceName ? ` from ${command.sourceName}` : ''}`;
+      break;
+    }
+    case CommandType.UpdateCustomer: {
+      const customer = workspace.customers.find((item) => item.id === command.customerId);
+      if (!customer) {
+        throw new Error('Customer is unavailable.');
+      }
+      if (
+        workspace.customers.some(
+          (item) =>
+            item.id !== command.customerId &&
+            item.name.toLowerCase() === command.customer.name.toLowerCase(),
+        )
+      ) {
+        throw new Error('Another customer already has this name.');
+      }
+      const oldName = customer.name;
+      Object.assign(customer, command.customer);
+      detail = `${oldName}: customer details updated${customer.status === CustomerStatus.OnHold ? ' and account placed on hold' : ''}`;
+      entityId = customer.id;
       break;
     }
     case CommandType.CreateInvoice:
@@ -128,7 +169,7 @@ export function applyCommand(
         numbers.add(number);
         workspace.invoices.push({ ...invoice, id: crypto.randomUUID(), paid: 0 });
       }
-      detail = `${invoices.length} invoice${invoices.length === 1 ? '' : 's'} created`;
+      detail = `${invoices.length} invoice${invoices.length === 1 ? '' : 's'} created${command.type === CommandType.ImportInvoices && command.sourceName ? ` from ${command.sourceName}` : ''}`;
       break;
     }
     case CommandType.DisputeInvoice: {
@@ -145,13 +186,140 @@ export function applyCommand(
       entityId = invoice.id;
       break;
     }
+    case CommandType.AdjustInvoice:
+    case CommandType.IssueCreditNote: {
+      const invoice = workspace.invoices.find((item) => item.id === command.invoiceId);
+      if (!invoice || invoice.status !== InvoiceStatus.Open) {
+        throw new Error('Only open invoices can be corrected.');
+      }
+
+      const isCreditNote = command.type === CommandType.IssueCreditNote;
+      const direction = isCreditNote ? InvoiceAdjustmentDirection.Decrease : command.direction;
+      const nextAmount =
+        invoice.amount +
+        (direction === InvoiceAdjustmentDirection.Increase ? command.amount : -command.amount);
+
+      if (
+        !Number.isSafeInteger(nextAmount) ||
+        nextAmount <= 0 ||
+        nextAmount < invoice.paid ||
+        nextAmount > FINANCE.maximumAmount
+      ) {
+        throw new Error('Correction would make the invoice amount invalid or less than paid.');
+      }
+
+      if (isCreditNote) {
+        const duplicate = workspace.invoiceCorrections.some(
+          (item) =>
+            item.kind === InvoiceCorrectionKind.CreditNote &&
+            item.number.toLowerCase() === command.number.toLowerCase(),
+        );
+        if (duplicate) {
+          throw new Error('A credit note already uses this number.');
+        }
+      }
+
+      invoice.amount = nextAmount;
+      entityId = crypto.randomUUID();
+      workspace.invoiceCorrections.unshift({
+        id: entityId,
+        invoiceId: invoice.id,
+        kind: isCreditNote ? InvoiceCorrectionKind.CreditNote : InvoiceCorrectionKind.Adjustment,
+        direction,
+        amount: command.amount,
+        number: isCreditNote ? command.number : '',
+        reason: command.reason,
+        createdAt: stamp,
+        createdBy: actor,
+      });
+      detail = `${invoice.number}: ${isCreditNote ? `credit note ${command.number}` : 'invoice adjustment'} ${direction.toLowerCase()} Rs ${command.amount / 100}. ${command.reason}`;
+      break;
+    }
+    case CommandType.RequestWriteOff: {
+      const invoice = workspace.invoices.find((item) => item.id === command.invoiceId);
+      if (!invoice || invoice.status !== InvoiceStatus.Open || balance(invoice) <= 0) {
+        throw new Error('Only an open outstanding invoice can be submitted for write-off.');
+      }
+      if (
+        workspace.writeOffRequests.some(
+          (request) =>
+            request.invoiceId === invoice.id && request.status === WriteOffStatus.Pending,
+        )
+      ) {
+        throw new Error('A write-off request is already pending for this invoice.');
+      }
+
+      entityId = crypto.randomUUID();
+      workspace.writeOffRequests.unshift({
+        id: entityId,
+        invoiceId: invoice.id,
+        amount: balance(invoice),
+        reason: command.reason,
+        status: WriteOffStatus.Pending,
+        requestedAt: stamp,
+        requestedById: actorId,
+        requestedBy: actor,
+        reviewedAt: '',
+        reviewedById: '',
+        reviewedBy: '',
+        reviewReason: '',
+      });
+      detail = `${invoice.number}: write-off requested for Rs ${balance(invoice) / 100}. ${command.reason}`;
+      break;
+    }
+    case CommandType.ReviewWriteOff: {
+      if (role !== Role.Owner && role !== Role.Admin) {
+        throw new Error('Only an owner or administrator can review write-offs.');
+      }
+      const request = workspace.writeOffRequests.find((item) => item.id === command.requestId);
+      if (!request || request.status !== WriteOffStatus.Pending) {
+        throw new Error('Write-off request is not pending.');
+      }
+      if (request.requestedById === actorId) {
+        throw new Error('A requester cannot approve or reject their own write-off.');
+      }
+
+      const invoice = workspace.invoices.find((item) => item.id === request.invoiceId);
+      if (command.approved) {
+        if (
+          !invoice ||
+          invoice.status !== InvoiceStatus.Open ||
+          balance(invoice) !== request.amount
+        ) {
+          throw new Error('Invoice balance changed. Reject this request and submit a new one.');
+        }
+
+        invoice.status = InvoiceStatus.WrittenOff;
+      }
+
+      request.status = command.approved ? WriteOffStatus.Approved : WriteOffStatus.Rejected;
+      request.reviewedAt = stamp;
+      request.reviewedById = actorId;
+      request.reviewedBy = actor;
+      request.reviewReason = command.reason;
+      detail = `${invoice?.number ?? 'Invoice'}: write-off ${command.approved ? 'approved' : 'rejected'}. ${command.reason}`;
+      entityId = request.id;
+      break;
+    }
+    case CommandType.RecordBankReconciliation: {
+      const result = reconcileBankStatement(workspace, command);
+      entityId = crypto.randomUUID();
+      workspace.bankReconciliations.unshift({
+        ...result,
+        id: entityId,
+        createdAt: stamp,
+        createdBy: actor,
+      });
+      detail = `${command.bank}: ${result.matchedCount} statement credits matched and ${result.issues.length} exception${result.issues.length === 1 ? '' : 's'} recorded from ${command.sourceName}`;
+      break;
+    }
     case CommandType.CreatePayment:
     case CommandType.ImportPayments: {
       const payments =
         command.type === CommandType.CreatePayment ? [command.payment] : command.payments;
       const customerIds = new Set(workspace.customers.map((item) => item.id));
       const references = new Set(
-        workspace.payments.map((item) => `${item.bank}\u0000${item.reference.toLowerCase()}`),
+        workspace.payments.map((item) => paymentReferenceKey(item.bank, item.reference)),
       );
       for (const payment of payments) {
         if (payment.customerId && !customerIds.has(payment.customerId)) {
@@ -160,7 +328,7 @@ export function applyCommand(
         if (payment.date > date) {
           throw new Error('Payment date cannot be in the future.');
         }
-        const reference = `${payment.bank}\u0000${payment.reference.toLowerCase()}`;
+        const reference = paymentReferenceKey(payment.bank, payment.reference);
         if (references.has(reference)) {
           throw new Error(
             `Reference ${payment.reference} already exists for this bank. No rows were imported.`,
@@ -174,7 +342,7 @@ export function applyCommand(
           status: PaymentStatus.Unmatched,
         });
       }
-      detail = `${payments.length} payment${payments.length === 1 ? '' : 's'} added for review`;
+      detail = `${payments.length} payment${payments.length === 1 ? '' : 's'} added for review${command.type === CommandType.ImportPayments && command.sourceName ? ` from ${command.sourceName}` : ''}`;
       break;
     }
     case CommandType.AllocatePayment: {

@@ -40,7 +40,7 @@ flowchart LR
 
 Controllers validate raw input with Zod and call services. Services coordinate permissions and business rules. Repositories own database access. Models declare columns, composite keys, foreign keys, checks, and indexes. ESLint enforces these boundaries. Module files wire the layers together.
 
-Authentication resolves the session, user identity, and current organization membership through `AuthRepository.findAuthenticatedSession()`. It does not load invoices, payments, or the full workspace to authenticate each request. The workspace mapper groups allocations and promise baselines once, preserving list order while avoiding repeated table-array scans. The API still returns a complete workspace snapshot; server-side pagination is not implemented.
+Authentication resolves the session, user identity, and current organization membership through `AuthRepository.findAuthenticatedSession()`. It does not load invoices, payments, or the full workspace to authenticate each request. The workspace mapper groups allocations and promise baselines once, preserving list order while avoiding repeated table-array scans. `GET /api/workspace/records/:kind` provides bounded cursor pages for customers, invoices, and payments. The frontend uses a small bootstrap and these pages until a screen or action requires a complete workspace. Collections, credit, activity, and server overview calculations still need bounded database reads.
 
 ## Separate tables
 
@@ -48,23 +48,33 @@ Development fixtures and role-specific login accounts are available through `yar
 
 There is no workspace JSON column. Every collection is persisted in its own table. `WorkspaceRecord.data` is an assembled, typed response object created from table reads; it is not a database field.
 
-| Table                 | Model file                                                        | Stores                                                                                 |
-| --------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `organizations`       | [organization.model.ts](models/organization.model.ts)             | Business name, currency, timezone, and concurrency revision                            |
-| `users`               | [user.model.ts](models/user.model.ts)                             | Login identity and password hash                                                       |
-| `members`             | [member.model.ts](models/member.model.ts)                         | Organization/user membership and role; name/email come from the user                   |
-| `sessions`            | [session.model.ts](models/session.model.ts)                       | Hashed session tokens, user reference, expiry, demo flag                               |
-| `invitations`         | [invitation.model.ts](models/invitation.model.ts)                 | Hashed invitation tokens, organization, email, role, expiry                            |
-| `workspace_settings`  | [workspace-settings.model.ts](models/workspace-settings.model.ts) | One row per organization for reminder rules and template                               |
-| `customers`           | [customer.model.ts](models/customer.model.ts)                     | Business/contact fields, payment terms, status, approved credit limit                  |
-| `invoices`            | [invoice.model.ts](models/invoice.model.ts)                       | Customer reference, invoice number, dates, amount, allocated-paid total, stored status |
-| `payments`            | [payment.model.ts](models/payment.model.ts)                       | Receipt details, bank/reference, amount, optional customer, status                     |
-| `payment_allocations` | [payment-allocation.model.ts](models/payment-allocation.model.ts) | Individual amounts linking a payment to an invoice                                     |
-| `payment_promises`    | [payment-promise.model.ts](models/payment-promise.model.ts)       | Customer commitment, amount, deadline, status, note                                    |
-| `promise_baselines`   | [promise-baseline.model.ts](models/promise-baseline.model.ts)     | Payment allocation totals already present when a promise was created                   |
-| `interactions`        | [interaction.model.ts](models/interaction.model.ts)               | Customer contact history, author, channel, direction, outcome, next action             |
-| `reminder_jobs`       | [reminder-job.model.ts](models/reminder-job.model.ts)             | Queued/prepared/cancelled reminder text and scheduling metadata                        |
-| `audit_events`        | [audit-event.model.ts](models/audit-event.model.ts)               | Actor, time, action, description, and referenced entity identifier                     |
+| Table                                               | Model file                                                                | Stores                                                                                 |
+| --------------------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `organizations`                                     | [organization.model.ts](models/organization.model.ts)                     | Business name, currency, timezone, and concurrency revision                            |
+| `users`                                             | [user.model.ts](models/user.model.ts)                                     | Login identity and password hash                                                       |
+| `members`                                           | [member.model.ts](models/member.model.ts)                                 | Organization/user membership and role; name/email come from the user                   |
+| `sessions`                                          | [session.model.ts](models/session.model.ts)                               | Hashed session tokens, user reference, expiry, demo flag                               |
+| `invitations`                                       | [invitation.model.ts](models/invitation.model.ts)                         | Hashed invitation tokens, organization, email, role, expiry                            |
+| `password_resets`                                   | [password-reset.model.ts](models/password-reset.model.ts)                 | One-use hashed recovery tokens and expiry                                              |
+| `command_receipts`                                  | [command-receipt.model.ts](models/command-receipt.model.ts)               | Transactional request IDs, payload hashes, and committed revisions                     |
+| `workspace_settings`                                | [workspace-settings.model.ts](models/workspace-settings.model.ts)         | One row per organization for reminder rules and template                               |
+| `customers`                                         | [customer.model.ts](models/customer.model.ts)                             | Business/contact fields, payment terms, status, approved credit limit                  |
+| `invoices`                                          | [invoice.model.ts](models/invoice.model.ts)                               | Customer reference, invoice number, dates, amount, allocated-paid total, stored status |
+| `payments`                                          | [payment.model.ts](models/payment.model.ts)                               | Receipt details, bank/reference, amount, optional customer, status                     |
+| `payment_allocations`                               | [payment-allocation.model.ts](models/payment-allocation.model.ts)         | Individual amounts linking a payment to an invoice                                     |
+| `payment_promises`                                  | [payment-promise.model.ts](models/payment-promise.model.ts)               | Customer commitment, amount, deadline, status, note                                    |
+| `promise_baselines`                                 | [promise-baseline.model.ts](models/promise-baseline.model.ts)             | Payment allocation totals already present when a promise was created                   |
+| `interactions`                                      | [interaction.model.ts](models/interaction.model.ts)                       | Customer contact history, author, channel, direction, outcome, next action             |
+| `reminder_jobs`                                     | [reminder-job.model.ts](models/reminder-job.model.ts)                     | Queued/prepared/cancelled reminder text and scheduling metadata                        |
+| `audit_events`                                      | [audit-event.model.ts](models/audit-event.model.ts)                       | Actor, time, action, description, and referenced entity identifier                     |
+| `invoice_corrections`                               | [invoice-correction.model.ts](models/invoice-correction.model.ts)         | Internal adjustments and credit notes with reasons and actor history                   |
+| `write_off_requests`                                | [write-off-request.model.ts](models/write-off-request.model.ts)           | Two-person write-off requests and review decisions                                     |
+| `bank_reconciliations`                              | [bank-reconciliation.model.ts](models/bank-reconciliation.model.ts)       | Statement totals and reconciliation exceptions                                         |
+| `worker_leases`                                     | [worker-lease.model.ts](models/worker-lease.model.ts)                     | Cross-instance reminder scheduler coordination                                         |
+| `customer_territories`                              | [customer-territory.model.ts](models/customer-territory.model.ts)         | Explicit Sales member assignment by customer                                           |
+| `whatsapp_consents`                                 | [whatsapp-consent.model.ts](models/whatsapp-consent.model.ts)             | Recorded customer permission for automated reminders                                   |
+| `whatsapp_deliveries`                               | [whatsapp-delivery.model.ts](models/whatsapp-delivery.model.ts)           | Provider message ID, delivery state, and claim token                                   |
+| `whatsapp_webhook_events`, `whatsapp_status_events` | [whatsapp-webhook-event.model.ts](models/whatsapp-webhook-event.model.ts) | Dedupe incoming messages and retain out-of-order delivery events                       |
 
 TypeORM also maintains its `migrations` bookkeeping table.
 
@@ -89,7 +99,7 @@ erDiagram
   ORGANIZATIONS ||--o{ AUDIT_EVENTS : records
 ```
 
-Names such as salesperson, interaction author, and audit actor remain historical text fields because the current application accepts them as labels; they are not authenticated account IDs. Audit `entityId` can identify several kinds of record, so it is not a foreign key to one table. Credit decisions are represented in audit events and the customer's current approved limit.
+Names such as salesperson, interaction author, and audit actor remain historical text fields. Territory assignment separately uses authenticated member IDs. Audit `entityId` can identify several kinds of record, so it is not a foreign key to one table. Credit decisions are represented in audit events and the customer's current approved limit.
 
 ## Integrity and transaction rules
 
@@ -104,7 +114,7 @@ Names such as salesperson, interaction author, and audit actor remain historical
 - No generic financial-record deletion is provided. Foreign keys restrict deleting referenced records; removing ledger rows requires a dedicated domain operation.
 - SQL.js uses one connection, so the database service serializes transactions. PostgreSQL uses its transaction manager and repeatable-read transactions when assembling multi-table snapshots.
 
-Each persisted list has a `sortOrder` column to preserve existing UI ordering during migration. The browser still receives one assembled workspace snapshot; normalization changes storage without breaking the frontend API. The current worker still loads all organizations, so large-scale scheduling/reporting will require narrower queries and pagination.
+Each persisted list has a `sortOrder` column to preserve existing UI ordering during migration. The browser still receives one assembled workspace snapshot; normalization changes storage without breaking the frontend API. The reminder worker selects only organizations with enabled reminders or queued jobs and uses a renewable database lease. Record pages use cursor queries and indexes; the dashboard and mutations still load a full workspace.
 
 ## Migrations and existing data
 
@@ -125,16 +135,20 @@ The migration runs in a transaction. Invalid legacy records stop it rather than 
 
 ## Routes and an example
 
-| Method | Route                                                   | Controller            |
-| ------ | ------------------------------------------------------- | --------------------- |
-| GET    | `/api/health`                                           | HealthController      |
-| GET    | `/api/auth/config`, `/api/auth/session`                 | AuthController        |
-| POST   | `/api/auth/login`, `/api/auth/demo`, `/api/auth/logout` | AuthController        |
-| POST   | `/api/auth/invite`, `/api/auth/accept-invite`           | InvitationsController |
-| GET    | `/api/workspace`                                        | WorkspaceController   |
-| POST   | `/api/workspace/commands`                               | WorkspaceController   |
+| Method   | Route                                                                   | Controller                |
+| -------- | ----------------------------------------------------------------------- | ------------------------- |
+| GET      | `/api/health`, `/api/health/ready`                                      | HealthController          |
+| GET      | `/api/auth/config`, `/api/auth/session`                                 | AuthController            |
+| POST     | `/api/auth/login`, `/api/auth/demo`, `/api/auth/logout`                 | AuthController            |
+| POST     | `/api/auth/password-reset/request`, `/api/auth/password-reset/complete` | AuthController            |
+| POST     | `/api/auth/invite`, `/api/auth/accept-invite`                           | InvitationsController     |
+| GET      | `/api/workspace`                                                        | WorkspaceController       |
+| POST     | `/api/workspace/commands`                                               | WorkspaceController       |
+| GET      | `/api/workspace/records/:kind`                                          | WorkspaceController       |
+| GET/POST | `/api/workspace/territories`, `/api/workspace/whatsapp-consents`        | WorkspaceController       |
+| GET/POST | `/api/whatsapp/webhook`                                                 | WhatsAppWebhookController |
 
-For a payment allocation, Vue posts `{ revision, command }`. The session guard determines the organization. The controller validates the command, the workspace service applies the financial rules, and the repository saves the new allocation, receipt status, invoice paid total, affected promises, and audit entry together. A stale revision returns a conflict and saves nothing.
+For a payment allocation, Vue posts `{ revision, requestId, command }`. The session guard determines the organization. The controller validates the command, the workspace service applies the financial rules, and the repository saves the new allocation, receipt status, invoice paid total, affected promises, audit entry, and command receipt together. A stale revision returns a conflict and saves nothing; replaying the same request ID and payload returns the current snapshot without applying the change again.
 
 Public registration is removed; `POST /api/auth/register` returns 404. The internal `AccountsService.createCompany()` helper inserts organization, user, membership, settings, and initial records in one transaction, but has no HTTP route. The operator setup interface and contact details will be configured later. Existing users retain sign-in, and invitation acceptance consumes the token, inserts the user/membership, and advances the revision together. Development demo creation remains gated off in production.
 
@@ -157,4 +171,4 @@ yarn lint             Coding and layer boundaries
 yarn format:check     Formatting verification
 ```
 
-Backend startup also applies pending migrations. The local database is `data/revora.sqlite`; `DATABASE_URL` selects PostgreSQL. Neither the migration command nor these checks execute the test suite. Migration/persistence test sources are in `tests/database.test.ts`; execution remains paused as requested.
+Backend startup also applies pending migrations. The local database is `data/revora.sqlite`; `DATABASE_URL` selects PostgreSQL. Neither the migration command nor these checks execute the test suite. Migration/persistence checks are in `tests/database.test.ts`.

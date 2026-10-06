@@ -67,6 +67,40 @@
   }
 }
 
+.import-sample {
+  margin-top: 16px;
+  overflow-x: auto;
+  font-size: 12px;
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+  }
+  th,
+  td {
+    text-align: left;
+    padding: 7px 9px;
+    border-bottom: 1px solid $surface-muted;
+  }
+}
+
+.import-all-rows {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.bank-mapping {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid $surface-muted;
+  border-radius: 8px;
+  background: $surface-soft;
+  > strong {
+    display: block;
+    margin-bottom: 12px;
+  }
+}
+
 .invite-result {
   padding: 15px;
   border: 1px solid $surface-muted;

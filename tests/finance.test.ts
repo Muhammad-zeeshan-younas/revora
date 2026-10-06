@@ -18,6 +18,7 @@ import {
   invoiceStatus,
   metrics,
   offsetDate,
+  operationsMetrics,
   suggestMatch,
   toPaisa,
 } from '../shared/finance';
@@ -82,6 +83,46 @@ function fixture() {
 }
 
 describe('exact money and receivable calculations', () => {
+  it('reports unallocated receipt aging and due promise fulfillment', () => {
+    const workspace = fixture();
+    workspace.payments.push({
+      ...payment,
+      id: 'payment-b',
+      amount: 10_000,
+      date: '2026-09-01',
+      allocations: [{ invoiceId: invoice.id, amount: 4_000 }],
+      status: PaymentStatus.Partial,
+    });
+    workspace.promises.push(
+      {
+        id: 'promise-a',
+        customerId: customer.id,
+        amount: 10_000,
+        date: '2026-09-10',
+        createdAt: '2026-09-01T00:00:00.000Z',
+        status: PromiseStatus.Kept,
+        note: '',
+        baselineAllocations: [],
+      },
+      {
+        id: 'promise-b',
+        customerId: customer.id,
+        amount: 10_000,
+        date: '2026-09-11',
+        createdAt: '2026-09-01T00:00:00.000Z',
+        status: PromiseStatus.PartiallyKept,
+        note: '',
+        baselineAllocations: [],
+      },
+    );
+    expect(operationsMetrics(workspace, date)).toEqual({
+      unallocatedReceipts: 2,
+      unallocatedAmount: 15_006_000,
+      receiptsWaitingSevenDays: 1,
+      promisesDue: 2,
+      promisesKept: 1,
+    });
+  });
   it('converts decimal strings without floating-point rounding loss', () => {
     expect(toPaisa('0.29')).toBe(29);
     expect(toPaisa('123456.78')).toBe(12345678);
@@ -361,6 +402,14 @@ describe('collections and promises', () => {
     expect(result.category).toBe(ReplyCategory.PromiseToPay);
     expect(result.amount).toBe(20000000);
     expect(result.date).toBe('2026-09-14');
+  });
+
+  it('prefers an explicit promise date over a weekday and reads the amount unit', () => {
+    const result = analyzeReply('Will pay by Monday 2026-09-17 Rs 1.5 lakh', date);
+
+    expect(result.category).toBe(ReplyCategory.PromiseToPay);
+    expect(result.amount).toBe(15_000_000);
+    expect(result.date).toBe('2026-09-17');
   });
 });
 describe('CSV safety and imports', () => {

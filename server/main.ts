@@ -7,9 +7,13 @@ import helmet from 'helmet';
 import { resolve } from 'node:path';
 import 'reflect-metadata';
 import { AppModule } from './app.module';
+import { validateProductionEnvironment } from './config/production';
 import { ApiExceptionFilter } from './filters/api-exception.filter';
 
+const WHATSAPP_WEBHOOK_PATH = '/api/whatsapp/webhook';
+
 async function bootstrap(): Promise<void> {
+  validateProductionEnvironment();
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { bodyParser: false });
   app.use(
     helmet({
@@ -24,12 +28,20 @@ async function bootstrap(): Promise<void> {
       },
     }),
   );
-  app.use(json({ limit: '2mb' }));
+  app.use(
+    json({
+      limit: '2mb',
+      verify: (request, _response, buffer) => {
+        (request as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
+      },
+    }),
+  );
   const origin = process.env['APP_ORIGIN'] ?? 'http://127.0.0.1:5173';
   app.enableCors({ origin, credentials: true });
   app.use((request: Request, response: Response, next: NextFunction): void => {
     response.setHeader('Cache-Control', 'no-store');
     if (
+      request.path !== WHATSAPP_WEBHOOK_PATH &&
       !['GET', 'HEAD', 'OPTIONS'].includes(request.method) &&
       request.headers.origin &&
       request.headers.origin !== origin

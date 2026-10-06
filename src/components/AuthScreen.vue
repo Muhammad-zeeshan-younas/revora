@@ -2,33 +2,85 @@
   import { onMounted, ref } from 'vue';
   import { z } from 'zod';
   import { request } from '../lib/http-client';
-  import { loadWorkspace } from '../stores/workspace';
+  import { loadBootstrapWorkspace, loadWorkspace } from '../stores/workspace';
   import Icon from './ui/UiIcon.vue';
   import { AuthMode } from '../config/ui.enums';
 
   const mode = new URLSearchParams(location.search).has('invite')
     ? AuthMode.Invite
     : AuthMode.Login;
+  const resetToken = new URLSearchParams(location.search).get('reset');
+  const verificationToken = new URLSearchParams(location.search).get('verify');
+  const verificationMessage = ref('');
+  const verificationSent = ref(false);
+  const passwordReset = ref(Boolean(resetToken));
+  const resetSent = ref(false);
   const email = ref('');
   const password = ref('');
+  const authenticatorCode = ref('');
+  const mfaRequired = ref(false);
   const name = ref('');
   const pending = ref(false);
   const error = ref('');
   const demoEnabled = ref(false);
+  const passwordResetEnabled = ref(false);
   onMounted(async () => {
+    if (verificationToken) {
+      try {
+        await request('/auth/email-verification/complete', z.object({ ok: z.boolean() }), {
+          token: verificationToken,
+        });
+        verificationMessage.value = 'Email verified. You can sign in now.';
+        history.replaceState({}, '', location.pathname);
+      } catch (cause) {
+        verificationMessage.value =
+          cause instanceof Error ? cause.message : 'Email verification failed.';
+      }
+    }
     try {
-      demoEnabled.value = (
-        await request('/auth/config', z.object({ demoEnabled: z.boolean() }))
-      ).demoEnabled;
+      const config = await request(
+        '/auth/config',
+        z.object({ demoEnabled: z.boolean(), passwordResetEnabled: z.boolean() }),
+      );
+      demoEnabled.value = config.demoEnabled;
+      passwordResetEnabled.value = config.passwordResetEnabled;
     } catch {
       error.value = 'The server is unavailable. Start the backend and retry.';
     }
   });
 
+  async function resendVerification(): Promise<void> {
+    pending.value = true;
+    error.value = '';
+    try {
+      await request('/auth/email-verification/request', z.object({ ok: z.boolean() }), {
+        email: email.value,
+      });
+      verificationSent.value = true;
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : 'Could not send verification email.';
+    } finally {
+      pending.value = false;
+    }
+  }
+
   async function signIn(demo = false): Promise<void> {
     pending.value = true;
     error.value = '';
     try {
+      if (passwordReset.value) {
+        await request(
+          resetToken ? '/auth/password-reset/complete' : '/auth/password-reset/request',
+          z.object({ ok: z.boolean() }),
+          resetToken ? { token: resetToken, password: password.value } : { email: email.value },
+        );
+        resetSent.value = true;
+        if (resetToken) {
+          history.replaceState({}, '', location.pathname);
+        }
+
+        return;
+      }
       const path = demo
         ? '/auth/demo'
         : mode === AuthMode.Invite
@@ -42,10 +94,25 @@
               name: name.value,
               password: password.value,
             }
-          : { email: email.value, password: password.value };
-      await request(path, z.object({ ok: z.boolean() }), body);
+          : {
+              email: email.value,
+              password: password.value,
+              ...(mfaRequired.value ? { code: authenticatorCode.value } : {}),
+            };
+      const result = await request(
+        path,
+        z.object({ ok: z.boolean(), mfaRequired: z.boolean().optional() }),
+        body,
+      );
+      if (result.mfaRequired) {
+        mfaRequired.value = true;
+        authenticatorCode.value = '';
+
+        return;
+      }
       history.replaceState({}, '', location.pathname);
-      await loadWorkspace();
+      if (window.location.hash && window.location.hash !== '#overview') {await loadWorkspace();}
+      else {await loadBootstrapWorkspace();}
     } catch (cause) {
       error.value = cause instanceof Error ? cause.message : 'Sign in failed.';
     } finally {
@@ -108,17 +175,48 @@
       <div class="auth-form-inner">
         <span class="eyebrow">WELCOME TO REVORA</span>
         <h2>
-          {{ mode === AuthMode.Login ? 'Your workspace awaits.' : 'Join your team.' }}
+          {{
+            passwordReset
+              ? resetToken
+                ? 'Choose a new password.'
+                : 'Reset your password.'
+              : mode === AuthMode.Login
+                ? 'Your workspace awaits.'
+                : 'Join your team.'
+          }}
         </h2>
         <p>
           {{
-            mode === AuthMode.Login
-              ? 'Sign in to keep your business moving forward.'
-              : 'Accept your invitation to access your company workspace.'
+            passwordReset
+              ? resetSent
+                ? resetToken
+                  ? 'Your password has been updated. Return to sign in.'
+                  : 'Check your email, or return to sign in.'
+                : resetToken
+                  ? 'Enter a new password to regain access.'
+                  : 'We will email a reset link if an account exists.'
+              : mode === AuthMode.Login
+                ? 'Sign in to keep your business moving forward.'
+                : 'Accept your invitation to access your company workspace.'
           }}
         </p>
-        <form @submit.prevent="signIn()">
-          <label v-if="mode === AuthMode.Invite">
+        <p
+          v-if="verificationMessage"
+          role="status"
+        >
+          {{ verificationMessage }}
+        </p>
+        <p
+          v-if="verificationSent"
+          role="status"
+        >
+          If this account needs verification, check your inbox for a link.
+        </p>
+        <form
+          v-if="!resetSent"
+          @submit.prevent="signIn()"
+        >
+          <label v-if="mode === AuthMode.Invite && !passwordReset">
             Full name
             <input
               v-model="name"
@@ -127,7 +225,7 @@
               placeholder="Hassan Ahmed"
             />
           </label>
-          <label v-if="mode === AuthMode.Login">
+          <label v-if="mode === AuthMode.Login && (!passwordReset || !resetToken)">
             Work email
             <input
               v-model="email"
@@ -137,17 +235,29 @@
               placeholder="you@company.com"
             />
           </label>
-          <label>
+          <label v-if="!passwordReset || resetToken">
             Password
             <input
               v-model="password"
               required
               type="password"
-              :minlength="mode === AuthMode.Login ? 1 : 12"
+              :minlength="passwordReset || mode !== AuthMode.Login ? 12 : 1"
               :autocomplete="mode === AuthMode.Login ? 'current-password' : 'new-password'"
               :placeholder="
                 mode === AuthMode.Login ? 'Enter your password' : 'At least 12 characters'
               "
+            />
+          </label>
+          <label v-if="mfaRequired && !passwordReset">
+            Authenticator code
+            <input
+              v-model="authenticatorCode"
+              required
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              pattern="[0-9]{6}"
+              maxlength="6"
+              placeholder="Six-digit code"
             />
           </label>
           <p
@@ -166,11 +276,48 @@
               name="spinner"
               class="spin"
             />
-            {{ mode === AuthMode.Login ? 'Sign in' : 'Join workspace' }}
+            {{
+              passwordReset
+                ? resetToken
+                  ? 'Save new password'
+                  : 'Send reset link'
+                : mode === AuthMode.Login
+                  ? 'Sign in'
+                  : 'Join workspace'
+            }}
             <Icon name="arrow" />
           </button>
         </form>
-        <template v-if="demoEnabled && mode === AuthMode.Login">
+        <button
+          v-if="mode === AuthMode.Login && !passwordReset && passwordResetEnabled"
+          type="button"
+          class="text-button"
+          @click="passwordReset = true"
+        >
+          Forgot password?
+        </button>
+        <button
+          v-if="mode === AuthMode.Login && !passwordReset && passwordResetEnabled && email"
+          type="button"
+          class="text-button"
+          :disabled="pending"
+          @click="resendVerification"
+        >
+          Send email verification link
+        </button>
+        <button
+          v-if="passwordReset"
+          type="button"
+          class="text-button"
+          @click="
+            passwordReset = false;
+            resetSent = false;
+            error = '';
+          "
+        >
+          Back to sign in
+        </button>
+        <template v-if="demoEnabled && mode === AuthMode.Login && !passwordReset">
           <div class="divider-text">OR TAKE A LOOK AROUND</div>
           <button
             class="button full"

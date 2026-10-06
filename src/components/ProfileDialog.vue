@@ -1,7 +1,9 @@
 <script setup lang="ts">
   import { ActionKind } from '../config/ui.enums';
 
-  import { computed, ref } from 'vue';
+  import { computed, ref, watch } from 'vue';
+  import { z } from 'zod';
+  import { AttachmentTarget, Role } from '../../shared/enums';
   import type { Workspace } from '../../shared/schema';
   import { account, balance, formatMoney, invoiceStatus } from '../../shared/finance';
   import type { Action } from '../types';
@@ -9,6 +11,22 @@
   import Icon from './ui/UiIcon.vue';
   import Badge from './ui/UiBadge.vue';
   import EmptyState from './ui/EmptyState.vue';
+  import { request } from '../lib/http-client';
+  import { snapshot } from '../stores/workspace';
+  import { notify } from '../composables/useNotifications';
+
+  const whatsAppConsentListSchema = z.array(
+    z.object({
+      customerId: z.string(),
+      source: z.string(),
+      recordedBy: z.string(),
+      recordedAt: z.string(),
+    }),
+  );
+  const whatsAppConsentResultSchema = z.object({
+    revision: z.number().int(),
+    consented: z.boolean(),
+  });
 
   const props = defineProps<{ workspace: Workspace; customerId: string }>();
   const emit = defineEmits<{ close: []; action: [action: Action] }>();
@@ -17,6 +35,22 @@
   );
   const financials = computed(() => account(props.workspace, props.customerId));
   const tab = ref('invoices');
+  const consented = ref(false);
+  const recordedConsentSource = ref('');
+  const consentSource = ref('');
+  const consentError = ref('');
+  const consentSaving = ref(false);
+  const canManageConsent = computed(() =>
+    [Role.Owner, Role.Admin, Role.Collections].includes(
+      snapshot.value?.session.user.role ?? Role.Viewer,
+    ),
+  );
+  const canEditFinancialRecords = computed(() =>
+    [Role.Owner, Role.Admin, Role.Accountant].includes(
+      snapshot.value?.session.user.role ?? Role.Viewer,
+    ),
+  );
+  const canRecordCollections = computed(() => snapshot.value?.session.user.role !== Role.Viewer);
   const invoices = computed(() =>
     props.workspace.invoices.filter((item) => item.customerId === props.customerId),
   );
@@ -28,6 +62,51 @@
   );
   const interactions = computed(() =>
     props.workspace.interactions.filter((item) => item.customerId === props.customerId),
+  );
+
+  async function loadConsent(): Promise<void> {
+    try {
+      const records = await request('/workspace/whatsapp-consents', whatsAppConsentListSchema);
+      const record = records.find((item) => item.customerId === props.customerId);
+      consented.value = Boolean(record);
+      recordedConsentSource.value = record?.source ?? '';
+      consentSource.value = '';
+    } catch (cause) {
+      consentError.value =
+        cause instanceof Error ? cause.message : 'Could not load WhatsApp consent.';
+    }
+  }
+
+  async function saveConsent(next: boolean): Promise<void> {
+    if (!snapshot.value) {
+      return;
+    }
+    consentError.value = '';
+    consentSaving.value = true;
+    try {
+      const result = await request('/workspace/whatsapp-consents', whatsAppConsentResultSchema, {
+        customerId: props.customerId,
+        consented: next,
+        source: consentSource.value,
+        revision: snapshot.value.revision,
+      });
+      snapshot.value = { ...snapshot.value, revision: result.revision };
+      consented.value = result.consented;
+      recordedConsentSource.value = result.consented ? consentSource.value : '';
+      consentSource.value = '';
+      notify(result.consented ? 'WhatsApp consent recorded.' : 'WhatsApp consent withdrawn.');
+    } catch (cause) {
+      consentError.value =
+        cause instanceof Error ? cause.message : 'Could not save WhatsApp consent.';
+    } finally {
+      consentSaving.value = false;
+    }
+  }
+
+  watch(
+    () => props.customerId,
+    () => void loadConsent(),
+    { immediate: true },
   );
 </script>
 <template>
@@ -95,6 +174,27 @@
       </div>
       <div class="profile-actions">
         <button
+          class="button small"
+          @click="
+            emit('action', {
+              kind: ActionKind.Attachments,
+              target: AttachmentTarget.Customer,
+              targetId: customerId,
+              label: customer.name,
+            })
+          "
+        >
+          Documents
+        </button>
+        <button
+          v-if="canEditFinancialRecords"
+          class="button small"
+          @click="emit('action', { kind: ActionKind.EditCustomer, customerId })"
+        >
+          Edit account
+        </button>
+        <button
+          v-if="canRecordCollections"
           class="button primary small"
           @click="emit('action', { kind: ActionKind.Interaction, customerId })"
         >
@@ -105,18 +205,55 @@
           Log interaction
         </button>
         <button
+          v-if="canRecordCollections"
           class="button small"
           @click="emit('action', { kind: ActionKind.Promise, customerId })"
         >
           Record promise
         </button>
         <button
+          v-if="canEditFinancialRecords"
           class="button small"
           @click="emit('action', { kind: ActionKind.Invoice, customerId })"
         >
           New invoice
         </button>
       </div>
+      <section class="info-note">
+        <div>
+          <strong>
+            WhatsApp reminders: {{ consented ? 'consent recorded' : 'no consent recorded' }}
+          </strong>
+          <p>Automatic template reminders require recorded customer consent.</p>
+          <p v-if="recordedConsentSource">Recorded from: {{ recordedConsentSource }}</p>
+        </div>
+        <template v-if="canManageConsent">
+          <label>
+            Consent source or withdrawal reason
+            <input
+              v-model="consentSource"
+              minlength="5"
+              maxlength="500"
+              placeholder="For example: customer agreed by phone"
+            />
+          </label>
+          <button
+            type="button"
+            class="button small"
+            :disabled="consentSaving || consentSource.trim().length < 5"
+            @click="saveConsent(!consented)"
+          >
+            {{ consented ? 'Withdraw consent' : 'Record consent' }}
+          </button>
+        </template>
+        <p
+          v-if="consentError"
+          class="form-error"
+          role="alert"
+        >
+          {{ consentError }}
+        </p>
+      </section>
       <div class="tabs profile-tabs">
         <button
           v-for="item in ['invoices', 'payments', 'promises', 'history']"

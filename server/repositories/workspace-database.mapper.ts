@@ -10,6 +10,11 @@ import { MemberEntity } from '../models/member.model';
 import { WorkspaceSettingsEntity } from '../models/workspace-settings.model';
 import { CustomerEntity } from '../models/customer.model';
 import { InvoiceEntity } from '../models/invoice.model';
+import { InvoiceCorrectionEntity } from '../models/invoice-correction.model';
+import { WriteOffRequestEntity } from '../models/write-off-request.model';
+import { BankReconciliationEntity } from '../models/bank-reconciliation.model';
+import { bankReconciliationIssueSchema } from '../../shared/schema';
+import { z } from 'zod';
 import { PaymentEntity } from '../models/payment.model';
 import { PaymentAllocationEntity } from '../models/payment-allocation.model';
 import { PaymentPromiseEntity } from '../models/payment-promise.model';
@@ -22,6 +27,7 @@ import { AuditEventEntity } from '../models/audit-event.model';
 export async function loadWorkspaceFromDatabase(
   manager: EntityManager,
   id: string,
+  includeLaterTables = true,
 ): Promise<WorkspaceRecord | null> {
   const organization = await manager.getRepository(OrganizationEntity).findOneBy({ id });
   if (!organization) {
@@ -33,6 +39,9 @@ export async function loadWorkspaceFromDatabase(
     settings,
     customers,
     invoices,
+    invoiceCorrections,
+    writeOffRequests,
+    bankReconciliations,
     payments,
     allocations,
     promises,
@@ -46,6 +55,15 @@ export async function loadWorkspaceFromDatabase(
     manager.getRepository(WorkspaceSettingsEntity).findOneBy(where),
     manager.getRepository(CustomerEntity).find({ where, order }),
     manager.getRepository(InvoiceEntity).find({ where, order }),
+    includeLaterTables
+      ? manager.getRepository(InvoiceCorrectionEntity).find({ where, order })
+      : Promise.resolve([]),
+    includeLaterTables
+      ? manager.getRepository(WriteOffRequestEntity).find({ where, order })
+      : Promise.resolve([]),
+    includeLaterTables
+      ? manager.getRepository(BankReconciliationEntity).find({ where, order })
+      : Promise.resolve([]),
     manager.getRepository(PaymentEntity).find({ where, order }),
     manager.getRepository(PaymentAllocationEntity).find({ where, order }),
     manager.getRepository(PaymentPromiseEntity).find({ where, order }),
@@ -64,6 +82,12 @@ export async function loadWorkspaceFromDatabase(
     settings,
     customers,
     invoices,
+    invoiceCorrections,
+    writeOffRequests,
+    bankReconciliations: bankReconciliations.map((record) => ({
+      ...record,
+      issues: z.array(bankReconciliationIssueSchema).parse(JSON.parse(record.issuesJson)),
+    })),
     payments: payments.map((payment) => ({
       ...payment,
       customerId: payment.customerId ?? '',
@@ -121,6 +145,7 @@ async function synchronizeRows<T extends { organizationId: string }>(
 export async function saveWorkspaceToDatabase(
   manager: EntityManager,
   workspace: Workspace,
+  includeLaterTables = true,
 ): Promise<void> {
   const organizationId = workspace.organization.id;
   await synchronizeRows(
@@ -166,6 +191,42 @@ export async function saveWorkspaceToDatabase(
     })),
     (row) => row.id,
   );
+  if (includeLaterTables) {
+    await synchronizeRows(
+      manager,
+      InvoiceCorrectionEntity,
+      organizationId,
+      workspace.invoiceCorrections.map((correction, sortOrder) => ({
+        ...correction,
+        organizationId,
+        sortOrder,
+      })),
+      (row) => row.id,
+    );
+    await synchronizeRows(
+      manager,
+      WriteOffRequestEntity,
+      organizationId,
+      workspace.writeOffRequests.map((request, sortOrder) => ({
+        ...request,
+        organizationId,
+        sortOrder,
+      })),
+      (row) => row.id,
+    );
+    await synchronizeRows(
+      manager,
+      BankReconciliationEntity,
+      organizationId,
+      workspace.bankReconciliations.map(({ issues, ...reconciliation }, sortOrder) => ({
+        ...reconciliation,
+        issuesJson: JSON.stringify(issues),
+        organizationId,
+        sortOrder,
+      })),
+      (row) => row.id,
+    );
+  }
   await synchronizeRows(
     manager,
     PaymentEntity,
